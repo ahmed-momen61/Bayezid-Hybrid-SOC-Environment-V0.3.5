@@ -17,7 +17,11 @@ const { findSimilarIncidents, saveIncidentToMemory } = require('./memoryService'
 const crypto = require('crypto');
 const itsmService = require('./itsmService');
 const { analyzeLogFastLive } = require('./kineticFilter');
-
+const KernelStriker = require('./kernelStriker');
+KernelStriker.startTtlDaemon();
+const ThreatGrapher = require('./threatGrapher');
+const OracleReverser = require('./oracleAgent');
+const SwarmCrypto = require('./swarmCrypto');
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toString('hex');
 const IV_LENGTH = 16;
@@ -663,6 +667,10 @@ app.post('/api/v1/bridge/report-vuln', async(req, res) => {
         }
 
         console.log(`[🚨] Kinetic Filter Alert: ${triageResult.reason}. Escalating to Cognitive AI Engine!`);
+
+        const targetIpToBlock = req.body.spoofedIp || clientIp;
+        KernelStriker.blockIp(targetIpToBlock);
+
         let wardenReport = null;
         if (evidence && (evidence.includes('bash') || evidence.includes('wget') || evidence.length > 50)) {
             wardenReport = await runWardenSandbox(evidence);
@@ -700,8 +708,31 @@ app.post('/api/v1/bridge/report-vuln', async(req, res) => {
             console.log(`[🚨] Red Team reported: ${vulnName} (${severity})`);
             console.log(`[🔐] Evidence Encrypted & Stored in Vault.`);
 
+            const oracleReport = await OracleReverser.analyzePayload(req.body.evidence || "");
+            console.log(`[👁️] Oracle Insight: ${oracleReport.aiAnalysis}`);
+
+            ThreatGrapher.generateReport({
+                ticketId: ticketId || `BZ-INC-${Date.now()}`,
+                attackerIp: req.body.spoofedIp || clientIp,
+                payload: req.body.evidence || "Obfuscated Payload",
+                mlScore: triageResult.ml_analysis ? triageResult.ml_analysis.score : "Regex Match",
+                wardenStatus: wardenReport ? "Container Analysis Performed" : "Layer 3 Mitigation",
+                mitreTactic: "T1190 - Exploit Public-Facing Application",
+                finalAction: "OS Network Striker (WIN32 Block)",
+                severity: severity || "HIGH",
+                mlFeatures: triageResult.ml_analysis && triageResult.ml_analysis.features_extracted ? {
+                    entropy: triageResult.ml_analysis.features_extracted.entropy,
+                    symbols: triageResult.ml_analysis.features_extracted.special_chars,
+                    keywords: triageResult.ml_analysis.features_extracted.keyword_count
+                } : { entropy: "N/A", symbols: "N/A", keywords: "N/A" },
+                oracleAnalysis: oracleReport.aiAnalysis,
+                obfuscationType: oracleReport.obfuscation
+            });
+
             res.json({ status: "success", vulnId: vuln.id, ticketId: ticketId, message: "Vulnerability reported & Ticket Created." });
-        } catch (error) { res.status(500).json({ error: error.message }); }
+        } catch (error) {
+            res.status(500).json({ error: error.message });
+        }
     }
 });
 
@@ -1174,6 +1205,35 @@ app.post('/api/v1/red/forge', async(req, res) => {
     } catch (error) {
         console.error("[-] Forge API Error:", error.message);
         res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/v1/swarm/sync', async(req, res) => {
+    const { features, signature, sourceNode } = req.body;
+
+    if (!features || !signature) {
+        return res.status(400).json({ error: "Invalid Swarm Payload" });
+    }
+
+    const isValid = SwarmCrypto.verifySwarmPayload(features, signature);
+
+    if (!isValid) {
+        console.log(`[🚨] SWARM ALERT: Forged intel received from ${sourceNode}! Rejecting to protect Neural Engine.`);
+        return res.status(403).json({ error: "Cryptographic Signature Verification Failed. Intel Rejected." });
+    }
+
+    console.log(`[🐝] SWARM INTEL RECEIVED: Valid Zero-Day signature from [${sourceNode}].`);
+    console.log(`[🧠] Features assimilated: Entropy=${features.entropy}, Symbols=${features.special_chars}`);
+
+    try {
+        await axios.post('http://127.0.0.1:8000/api/v1/ml/feedback_features', {
+            features: features
+        });
+        console.log(`[✅] Neural Engine updated with Swarm Intel.`);
+        res.json({ status: "success", message: "Intel assimilated." });
+    } catch (error) {
+        console.log(`[⚠️] Failed to update Neural Engine with Swarm Intel.`);
+        res.status(500).json({ error: "Engine update failed" });
     }
 });
 

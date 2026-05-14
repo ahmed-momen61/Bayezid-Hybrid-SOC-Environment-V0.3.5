@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const axios = require('axios');
-
+const OracleReverser = require('./oracleAgent');
 const requestTracker = new Map();
 const mlCache = new Map();
 
@@ -74,8 +74,30 @@ const calculateRiskScore = (payload) => {
 const analyzeLogFastLive = async(ip, payloadData) => {
     const now = Date.now();
     const rawPayloadString = typeof payloadData === 'object' ? JSON.stringify(payloadData) : String(payloadData);
-    const payloadString = deepNormalizePayload(rawPayloadString);
+
+    let payloadString = deepNormalizePayload(rawPayloadString);
     let targetText = payloadData.evidence ? deepNormalizePayload(String(payloadData.evidence)) : payloadString;
+
+    const decodedB64 = OracleReverser.tryBase64(targetText);
+    if (decodedB64) {
+        console.log(`[👁️] Kinetic Filter: Deobfuscated Base64 payload instantly!`);
+        targetText = decodedB64;
+        payloadString = decodedB64;
+    }
+
+    const decodedHex = OracleReverser.tryHex(targetText);
+    if (decodedHex) {
+        console.log(`[👁️] Kinetic Filter: Deobfuscated Hex payload instantly!`);
+        targetText = decodedHex;
+        payloadString = decodedHex;
+    }
+
+    const decodedUrl = OracleReverser.tryUrlDecode(targetText);
+    if (decodedUrl) {
+        console.log(`[👁️] Kinetic Filter: Double URL Decode applied.`);
+        targetText = decodedUrl;
+        payloadString = decodedUrl;
+    }
 
     if (!requestTracker.has(ip)) {
         requestTracker.set(ip, { count: 1, firstSeen: now });
@@ -124,7 +146,11 @@ const analyzeLogFastLive = async(ip, payloadData) => {
             if (is_malicious) {
                 const alertResult = {
                     isSuspicious: true,
-                    reason: `ML Anomaly Detected by [${engine}]! Confidence: ${confidence}%. Features: [Entropy: ${features_extracted.entropy}, Symbols: ${features_extracted.special_chars}]. Possible Zero-Day or Obfuscation.`
+                    reason: `ML Anomaly Detected by [${engine}]! Confidence: ${confidence}%. Features: [Entropy: ${features_extracted.entropy}, Symbols: ${features_extracted.special_chars}]. Possible Zero-Day or Obfuscation.`,
+                    ml_analysis: {
+                        score: `Anomaly (-${(confidence/100).toFixed(3)})`,
+                        features_extracted: features_extracted
+                    }
                 };
                 mlCache.set(payloadHash, { isSuspicious: true, result: alertResult });
                 return alertResult;
