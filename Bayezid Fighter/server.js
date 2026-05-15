@@ -16,8 +16,9 @@ const { enrichWithCTI } = require('./ctiService');
 const { findSimilarIncidents, saveIncidentToMemory } = require('./memoryService');
 const crypto = require('crypto');
 const itsmService = require('./itsmService');
-const { analyzeLogFastLive } = require('./kineticFilter');
+const { analyzeLogFastLive, injectSwarmRule } = require('./kineticFilter');
 const KernelStriker = require('./kernelStriker');
+const WargamingEngine = require('./wargamingEngine');
 KernelStriker.startTtlDaemon();
 const ThreatGrapher = require('./threatGrapher');
 const OracleReverser = require('./oracleAgent');
@@ -25,6 +26,7 @@ const SwarmCrypto = require('./swarmCrypto');
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toString('hex');
 const IV_LENGTH = 16;
+const { startMatrixShell } = require('./matrixShell');
 
 function encryptEvidence(text) {
     let iv = crypto.randomBytes(IV_LENGTH);
@@ -842,7 +844,7 @@ app.post('/api/v1/bridge/isolate', async(req, res) => {
 });
 
 const startEscalationWatcher = () => {
-    setInterval(async() => {
+    const watch = async() => {
         try {
             const timeLimit = new Date(Date.now() - (liveConfig.SLA_TIMEOUT_MINUTES * 60 * 1000));
 
@@ -875,8 +877,12 @@ const startEscalationWatcher = () => {
             }
         } catch (error) {
             console.error('[-] Escalation Watcher Error:', error.message);
+        } finally {
+            setTimeout(watch, 60 * 1000);
         }
-    }, 60 * 1000);
+    };
+
+    watch();
 };
 
 app.post('/api/v1/bridge/rca', async(req, res) => {
@@ -978,6 +984,13 @@ io.on('connection', (socket) => {
     });
 });
 
+app.post('/api/v1/wargaming/start', async(req, res) => {
+    const { targetAsset } = req.body;
+    console.log(`\n[🚀] API Trigger: Launching GAN Wargaming Arena manually...`);
+    WargamingEngine.runArenaSession(targetAsset || "Production DB & Web API").catch(e => console.log(`[⚠️] Wargaming Error: ${e.message}`));
+    res.json({ status: "success", message: "GAN Wargaming started in the background. Check server console." });
+});
+
 const startBayezidServer = () => {
     const server = httpServer.listen(PORT, async() => {
         await loadConfigsFromDB();
@@ -1002,6 +1015,13 @@ const startBayezidServer = () => {
         }
         startEscalationWatcher();
         console.log(`[⏱️] SLA Escalation Watcher Active (${liveConfig.SLA_TIMEOUT_MINUTES} min timeout)`);
+
+        if (global.BAYEZID_MODE === 'BLUE') {
+            const { startMatrixShell } = require('./matrixShell');
+            startMatrixShell(2222);
+            startMatrixShell(8080);
+            console.log(`[⚡] Bayezid Intelligence Matrix is LIVE and Lethal.`);
+        }
     });
 
     server.on('error', (error) => {
@@ -1011,7 +1031,6 @@ const startBayezidServer = () => {
             console.error('\n[-] Server Crash:', error.message);
         }
     });
-
 };
 
 const rl = readline.createInterface({
@@ -1209,140 +1228,31 @@ app.post('/api/v1/red/forge', async(req, res) => {
 });
 
 app.post('/api/v1/swarm/sync', async(req, res) => {
-    const { features, signature, sourceNode } = req.body;
+    const { rule, signature, sourceNode } = req.body;
 
-    if (!features || !signature) {
+    if (!rule || !signature) {
         return res.status(400).json({ error: "Invalid Swarm Payload" });
     }
 
-    const isValid = SwarmCrypto.verifySwarmPayload(features, signature);
+    const isValid = SwarmCrypto.verifySwarmPayload(rule, signature);
 
     if (!isValid) {
-        console.log(`[🚨] SWARM ALERT: Forged intel received from ${sourceNode}! Rejecting to protect Neural Engine.`);
+        console.log(`[🚨] SWARM ALERT: Forged defense rule received from ${sourceNode}! Rejecting to protect Core Engine.`);
         return res.status(403).json({ error: "Cryptographic Signature Verification Failed. Intel Rejected." });
     }
 
-    console.log(`[🐝] SWARM INTEL RECEIVED: Valid Zero-Day signature from [${sourceNode}].`);
-    console.log(`[🧠] Features assimilated: Entropy=${features.entropy}, Symbols=${features.special_chars}`);
+    console.log(`\n[🐝] HYDRA PROTOCOL TRIGGERED: Valid Zero-Day Rule received from [${sourceNode}].`);
+    console.log(`[🧠] Rule Name: ${rule.rule_name}`);
 
     try {
-        await axios.post('http://127.0.0.1:8000/api/v1/ml/swarm_feedback', {
-            features: features
-        });
-        console.log(`[✅] Neural Engine updated with Swarm Intel.`);
-        res.json({ status: "success", message: "Intel assimilated into ML Model." });
+        injectSwarmRule(rule);
+        res.json({ status: "success", message: "Defense Rule assimilated into Kinetic Filter Memory." });
     } catch (error) {
-        console.log(`[⚠️] Failed to update Neural Engine with Swarm Intel. Is main.py running?`);
-        res.status(500).json({ error: "Engine update failed" });
+        console.log(`[⚠️] Failed to inject Swarm Rule.`);
+        res.status(500).json({ error: "Memory injection failed" });
     }
 });
 
-const HONEYPOT_PORT = 2222;
-
-const honeypotServer = net.createServer((socket) => {
-    console.log(`\n[🚨] HONEYPOT ALERT: Incoming connection from ${socket.remoteAddress}`);
-
-    socket.write("Ubuntu 22.04.1 LTS (Bayezid Secure Subsystem)\n");
-    socket.write("login: root\n");
-    socket.write("root@ubuntu:~# ");
-
-    let commandTracker = "";
-
-    socket.on('data', async(data) => {
-        const chunk = data.toString();
-
-        if (chunk === '\b' || chunk === '\x7f') {
-            if (commandTracker.length > 0) {
-                commandTracker = commandTracker.slice(0, -1);
-                socket.write('\b \b');
-            }
-            return;
-        }
-
-        commandTracker += chunk;
-
-        if (!chunk.includes('\n') && !chunk.includes('\r')) {
-            return;
-        }
-
-        const command = commandTracker.trim();
-        commandTracker = "";
-
-        if (!command) {
-            socket.write("root@ubuntu:~# ");
-            return;
-        }
-
-        if (command === 'exit' || command === 'quit') {
-            socket.write("logout\n");
-            socket.end();
-            return;
-        }
-
-        console.log(`[🕸️] Hacker typed in Honeypot: ${command}`);
-        socket.write("\nExecuting...\n");
-
-        try {
-            const execResult = await smartExec(command, 5000, false);
-            let realOutput = execResult.stdout || execResult.stderr || "No output returned.";
-
-            const weaponizedOutput = await runMirageAgent(command, realOutput);
-
-            socket.write(weaponizedOutput + "\nroot@ubuntu:~# ");
-        } catch (err) {
-            let realError = err.stderr || err.stdout || err.message;
-            const weaponizedError = await runMirageAgent(command, `OS Error: ${realError}`);
-            socket.write(weaponizedError + "\nroot@ubuntu:~# ");
-        }
-    });
-
-    socket.on('error', (err) => {
-        console.log(`[🕸️] Honeypot socket closed or error: ${err.message}`);
-    });
-});
-
-honeypotServer.listen(HONEYPOT_PORT, () => {
-    console.log(`[🕸️] Live High-Interaction Honeypot listening on TCP Port ${HONEYPOT_PORT}...`);
-});
-
-const PHANTOM_PORT = 8080;
-
-const DECEPTIVE_BANNERS = [
-    "SSH-2.0-OpenSSH_7.2p2 Ubuntu-4ubuntu2.8\r\n",
-    "220 Microsoft FTP Service\r\n",
-    "HTTP/1.1 200 OK\r\nServer: Apache/2.2.14 (Win32)\r\n\r\n",
-    "550 smtp.example.com ESMTP Postfix\r\n",
-    "220 ProFTPD 1.3.5 Server (ProFTPD Default Installation)\r\n",
-    "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"HP LaserJet Printer\"\r\n\r\n"
-];
-
-const phantomServer = net.createServer((socket) => {
-    const attackerIp = socket.remoteAddress;
-    console.log(`\n[👻] PHANTOM STACK: Scanner probe detected from ${attackerIp}`);
-
-    setTimeout(() => {
-        const fakeBanner = DECEPTIVE_BANNERS[Math.floor(Math.random() * DECEPTIVE_BANNERS.length)];
-        console.log(`[👻] Morphing signature... Presenting fake identity: ${fakeBanner.trim().split('\n')[0]}`);
-
-        try {
-            socket.write(fakeBanner);
-
-            setTimeout(() => {
-                socket.destroy();
-            }, 15000);
-        } catch (e) {}
-    }, 2000);
-
-    socket.on('data', (data) => {
-        console.log(`[👻] Scanner sent probe data: ${data.toString('hex').substring(0,30)}...`);
-    });
-
-    socket.on('error', () => {});
-});
-
-phantomServer.listen(PHANTOM_PORT, () => {
-    console.log(`[👻] Live Phantom Stack (Anti-Fingerprinting) listening on TCP Port ${PHANTOM_PORT}...`);
-});
 
 process.on('SIGINT', () => {
     console.log('\n[🛑] Graceful Shutdown Initiated...');

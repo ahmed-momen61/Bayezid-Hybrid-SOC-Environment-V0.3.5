@@ -79,6 +79,48 @@ const deepSanitize = (obj) => {
     return obj;
 };
 
+const analyzeWithGroq = async(prompt, requireJson = false) => {
+    const groqApiKey = process.env.GROQ_API_KEY;
+    if (!groqApiKey) throw new Error("GROQ_API_KEY missing");
+
+    const payload = {
+        model: "llama-3.1-8b-instant",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.6,
+        max_tokens: 2000
+    };
+
+    if (requireJson) {
+        payload.response_format = { type: "json_object" };
+    }
+
+    try {
+        const response = await axios.post('https://api.com/openai/v1/chat/completions', payload, {
+            headers: {
+                'Authorization': `Bearer ${groqApiKey}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        return response.data.choices[0].message.content;
+    } catch (err) {
+        const errorDetails = err.response && err.response.data ? JSON.stringify(err.response.data) : err.message;
+        throw new Error(`Groq API Error: ${errorDetails}`);
+    }
+};
+
+const chatWithLocalModelFast = async(prompt) => {
+    try {
+        const localResponse = await axios.post('http://localhost:11434/api/generate', {
+            model: process.env.LOCAL_MODEL_NAME || "qwen2.5-coder:7b",
+            prompt: prompt,
+            stream: false
+        });
+        return localResponse.data.response;
+    } catch (error) {
+        throw new Error(`Local AI Fast Chat Error: ${error.message}`);
+    }
+};
+
 const analyzeWithVertexAI = async(alertData) => {
     console.log('\n[☁️] Sending Data to Cloud AI (Waterfall Fallback Mode)...');
 
@@ -128,6 +170,7 @@ const analyzeWithVertexAI = async(alertData) => {
 
         let aiResponse = null;
         let successfulModel = "";
+        const fullPrompt = `${systemPrompt}\n\nAnalyze this data: ${safeDataString}`;
 
         for (const modelName of cloudModels) {
             try {
@@ -137,7 +180,7 @@ const analyzeWithVertexAI = async(alertData) => {
                     generationConfig: { responseMimeType: "application/json" }
                 });
 
-                const result = await model.generateContent(`${systemPrompt}\n\nAnalyze this data: ${safeDataString}`);
+                const result = await model.generateContent(fullPrompt);
                 const text = result.response.text();
 
                 aiResponse = JSON.parse(text);
@@ -149,13 +192,26 @@ const analyzeWithVertexAI = async(alertData) => {
             }
         }
 
-        if (!aiResponse) throw new Error("All cloud models exhausted.");
+        if (!aiResponse) {
+            console.log(`[⚡] All Gemini models exhausted. Switching to Groq LPU for SIEM Analysis...`);
+            try {
+                const groqResText = await analyzeWithGroq(fullPrompt + "\n\nCRITICAL: Return ONLY a valid JSON object.", true);
+
+                let cleanText = groqResText.replace(/```json/gi, '').replace(/```/gi, '').trim();
+                aiResponse = JSON.parse(cleanText);
+                successfulModel = "Groq Llama-3.1-8b";
+            } catch (groqErr) {
+                console.warn(`[⚠️] Groq SIEM Failed: ${groqErr.message}.`);
+            }
+        }
+
+        if (!aiResponse) throw new Error("All cloud models (Gemini & Groq) exhausted.");
 
         aiResponse = deepSanitize(aiResponse);
 
         return {
             ...aiResponse,
-            engine_used: `Google ${successfulModel} + Hybrid RAG (Cloud ☁️)`
+            engine_used: `${successfulModel} + Hybrid RAG (Cloud ☁️)`
         };
 
     } catch (error) {
@@ -295,76 +351,79 @@ const orchestrateRedSwarm = async(targetInfo, currentState) => {
 };
 
 const askRedSwarmAI = async(prompt, requireJson = true, maxRetries = 3) => {
-    const cloudModels = [
-        "gemini-2.5-flash",
-        //"gemini-2.0-flash"
-    ];
+    let aiResponseText = null;
 
-    for (const modelName of cloudModels) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+            const model = genAI.getGenerativeModel({
+                model: "gemini-2.5-flash",
+                generationConfig: requireJson ? { responseMimeType: "application/json" } : {}
+            });
+
+            const response = await model.generateContent(prompt);
+            aiResponseText = response.response.text();
+            break;
+        } catch (error) {
+            const isRetryable = error.message.includes('503') || error.message.includes('429');
+            if (isRetryable && attempt < maxRetries) {
+                const waitTime = attempt * 3000;
+                console.warn(`[⏳] Gemini Issue (${error.message.substring(0,30)}). Retrying in ${waitTime/1000}s...`);
+                await new Promise(resolve => setTimeout(resolve, waitTime));
+                continue;
+            }
+            console.warn(`[⚠️] Gemini Failed: ${error.message}`);
+            break;
+        }
+    }
+
+    if (!aiResponseText) {
+        console.log(`\n[⚡] Gemini Exhausted! Switching to Groq LPU...`);
+        const groqPrompt = prompt + (requireJson ? "\n\nCRITICAL: Return ONLY a valid JSON object." : "");
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
-                const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
-                const model = genAI.getGenerativeModel({
-                    model: modelName,
-                    generationConfig: requireJson ? { responseMimeType: "application/json" } : {}
-                });
-
-                const response = await model.generateContent(prompt);
-                let text = response.response.text();
-
-                if (requireJson) {
-                    text = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
-
-                    text = text.replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
-
-                    return JSON.parse(text);
-                }
-                return text;
-
+                aiResponseText = await analyzeWithGroq(groqPrompt, requireJson);
+                break;
             } catch (error) {
-                const isRetryable = error.message.includes('503') ||
-                    error.message.includes('429') ||
-                    error.message.includes('JSON') ||
-                    error.name === 'SyntaxError';
-
-                if (isRetryable && attempt < maxRetries) {
-                    const waitTime = attempt * 3000;
-                    console.warn(`[⏳] Generation Issue (${error.message.substring(0, 30)}...). Attempt ${attempt}/${maxRetries}. Retrying in ${waitTime/1000}s...`);
-                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                if (attempt < maxRetries) {
+                    await new Promise(resolve => setTimeout(resolve, attempt * 2000));
                     continue;
                 }
-
-                console.warn(`[⚠️] Cloud Model (${modelName}) Failed after ${attempt} attempts. Switching to next...`);
-                break;
+                console.warn(`[⚠️] Groq Failed: ${error.message}`);
             }
         }
     }
 
-    console.log(`\n[🚨] ALL Cloud Models Exhausted!`);
-    console.log(`[🔄] Initiating Last Resort Fallback to Local AI (Ollama/Qwen)...`);
+    if (!aiResponseText) {
+        console.log(`\n[🚨] Cloud & Groq Exhausted!`);
+        console.log(`[🔄] Initiating Last Resort Fallback to Local AI (Ollama/Qwen)...`);
+        try {
+            const localPrompt = prompt + (requireJson ? "\n\nCRITICAL: Return ONLY a valid JSON object." : "");
+            const localResponse = await axios.post('http://localhost:11434/api/generate', {
+                model: process.env.LOCAL_MODEL_NAME || "qwen2.5-coder:7b",
+                prompt: localPrompt,
+                stream: false,
+                format: requireJson ? "json" : ""
+            });
+            aiResponseText = localResponse.data.response;
+        } catch (localError) {
+            console.error(`[❌] Local AI also failed. System is blind: ${localError.message}`);
+            throw new Error("All AI Engines failed.");
+        }
+    }
 
-    try {
-        const axios = require('axios');
-        const localResponse = await axios.post('http://localhost:11434/api/generate', {
-            model: process.env.LOCAL_MODEL_NAME || "qwen2.5-coder:7b",
-            prompt: prompt + (requireJson ? "\n\nCRITICAL: You MUST return ONLY valid JSON formatting without markdown blocks." : ""),
-            stream: false,
-            format: requireJson ? "json" : ""
-        });
-
-        let text = localResponse.data.response;
-
-        if (requireJson) {
-            text = text.replace(/```json/gi, '').replace(/```/gi, '').trim();
+    if (requireJson && aiResponseText) {
+        try {
+            let text = aiResponseText.replace(/```json/gi, '').replace(/```/gi, '').trim();
             text = text.replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
             return JSON.parse(text);
+        } catch (e) {
+            console.error(`[❌] Failed to parse JSON from AI response:`, e.message);
+            throw e;
         }
-        return text;
-
-    } catch (localError) {
-        console.error(`[❌] Local AI also failed. System is blind: ${localError.message}`);
-        throw new Error("Both Cloud and Local AI Engines failed.");
     }
+
+    return aiResponseText;
 };
 
 const runScoutAgent = async(targetInfo, customInstructions = "") => {
@@ -1140,20 +1199,6 @@ const runWardenSandbox = async(suspiciousPayload) => {
     }
 };
 
-const askLocalCoder = async(prompt) => {
-    const axios = require('axios');
-    try {
-        const response = await axios.post('http://localhost:11434/api/generate', {
-            model: process.env.LOCAL_MODEL_NAME || 'qwen2.5-coder:7b',
-            prompt: prompt,
-            stream: false
-        });
-        return response.data.response;
-    } catch (err) {
-        console.error("[-] Local Coder Error:", err.message);
-        throw err;
-    }
-};
 
 const runZeroDayForgeAgent = async(vulnContext, maxRetries = 3) => {
     console.log(`\n[⚒️] The Forge is warming up... Initiating autonomous Exploit Development for: ${vulnContext}`);
@@ -1171,13 +1216,13 @@ const runZeroDayForgeAgent = async(vulnContext, maxRetries = 3) => {
     `;
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        console.log(`[⚒️] Forge Attempt ${attempt}/${maxRetries}: Generating Exploit Code via Local AI (Qwen)...`);
+        console.log(`[⚒️] Forge Attempt ${attempt}/${maxRetries}: Generating Exploit Code via AI Waterfall (Gemini -> Groq -> Local)...`);
 
         let aiResponse;
         try {
-            aiResponse = await askLocalCoder(currentPrompt);
+            aiResponse = await askRedSwarmAI(currentPrompt, false);
         } catch (err) {
-            console.error("[-] Local AI is down. Ensure Ollama/Qwen is running.");
+            console.error("[-] AI Waterfall is completely down (Cloud & Local failed).");
             return null;
         }
 
@@ -1189,7 +1234,7 @@ const runZeroDayForgeAgent = async(vulnContext, maxRetries = 3) => {
             continue;
         }
 
-        console.log(`\n[🔥] Forge Payload Generated by Qwen 2.5:`);
+        console.log(`\n[🔥] Forge Payload Generated by AI Waterfall:`);
         console.log(`--------------------------------------------------\n\x1b[33m${pythonCode}\x1b[0m\n--------------------------------------------------`);
 
         const fs = require('fs');
@@ -1242,7 +1287,7 @@ const runZeroDayForgeAgent = async(vulnContext, maxRetries = 3) => {
                 };
             }
 
-            console.log(`[🔄] Feeding the compilation error back to Qwen for autonomous fixing...`);
+            console.log(`[🔄] Feeding the compilation error back to the Waterfall for autonomous fixing...`);
 
             currentPrompt = `
             The previous Python code you generated had the following compilation/syntax error:
@@ -1256,6 +1301,8 @@ const runZeroDayForgeAgent = async(vulnContext, maxRetries = 3) => {
     }
     return null;
 };
+
+
 
 module.exports = {
     smartExec,
@@ -1277,6 +1324,9 @@ module.exports = {
     executeAlchemistFuzzingLoop,
     runMirageAgent,
     runWardenSandbox,
-    runZeroDayForgeAgent
+    runZeroDayForgeAgent,
+    analyzeWithGroq,
+    chatWithLocalModelFast,
+    askRedSwarmAI
 
 };

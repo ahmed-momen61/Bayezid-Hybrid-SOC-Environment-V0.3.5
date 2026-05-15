@@ -4,6 +4,18 @@ const OracleReverser = require('./oracleAgent');
 const requestTracker = new Map();
 const mlCache = new Map();
 
+const SWARM_SIGNATURES = [];
+
+const injectSwarmRule = (ruleData) => {
+    try {
+        const regex = new RegExp(ruleData.regex_pattern, 'i');
+        SWARM_SIGNATURES.push({ name: `Swarm: ${ruleData.rule_name}`, regex: regex });
+        console.log(`[💉] HYDRA PROTOCOL: Hot-Reloaded Swarm Rule [${ruleData.rule_name}] into Memory without restart.`);
+    } catch (e) {
+        console.log(`[⚠️] HYDRA Error compiling Swarm Regex: ${e.message}`);
+    }
+};
+
 const THREAT_SIGNATURES = [
     { name: "SQL Injection", regex: /(?:'|"|`|\\b)[\s\S]*?\b(select|drop|union|insert|update|delete|truncate)\b/i },
     { name: "Cross-Site Scripting (XSS)", regex: /(?:<script>|<img.*?onload=|javascript:)/i },
@@ -118,6 +130,14 @@ const analyzeLogFastLive = async(ip, payloadData) => {
         }
     }
 
+    for (const sig of SWARM_SIGNATURES) {
+        if (sig.regex.test(payloadString)) {
+            return { isSuspicious: true, reason: `Hydra Swarm Defense [${sig.name}] Blocked Payload!` };
+        }
+    }
+
+
+
     if (payloadString.length > 5000) {
         return { isSuspicious: true, reason: `Live Anomaly: Payload size (${payloadString.length} bytes) exceeds safe limits.` };
     }
@@ -174,4 +194,4 @@ const analyzeLogFastLive = async(ip, payloadData) => {
     return { isSuspicious: false, reason: "Traffic deemed safe by 3-Tier Engine." };
 };
 
-module.exports = { analyzeLogFastLive };
+module.exports = { analyzeLogFastLive, injectSwarmRule };
