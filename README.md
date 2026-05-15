@@ -1,4 +1,4 @@
-# Bayezid Hybrid SOC Environment V0.3.4 (The Generative Deception & Collective Immunity Update)
+# Bayezid Hybrid SOC Environment V0.3.5 (The Generative Deception & Collective Immunity Update)
 
 ![AI-Powered](https://img.shields.io/badge/AI-Waterfall_Swarm-orange.svg)
 ![Deception](https://img.shields.io/badge/Defense-Generative_Matrix-blue.svg)
