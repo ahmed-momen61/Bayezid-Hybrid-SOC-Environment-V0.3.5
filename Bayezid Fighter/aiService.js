@@ -943,33 +943,79 @@ const runShadowRouterAgent = async(attackerIp, vulnName) => {
     }
 };
 
-const runForensicRCAAgent = async(vulnName, targetIp, logsSnippet) => {
-    console.log(`\n[🔍] Forensic RCA Agent is investigating the root cause...`);
+const runForensicRCAAgent = async(forensicPayload) => {
+    console.log(`\n[🔍] Scribe (Forensic RCA Agent) is drafting the Master Incident Report...`);
+
+    let payloadStr = "";
+    let incidentId = `BZ-INC-${Date.now()}`;
+
+    if (arguments.length > 1 && typeof arguments[0] === 'string') {
+        payloadStr = `Vulnerability: ${arguments[0]}\nTarget IP: ${arguments[1]}\nLogs: ${arguments[2]}`;
+    } else {
+        payloadStr = JSON.stringify(forensicPayload, null, 2);
+        if (forensicPayload && forensicPayload.incident_id) {
+            incidentId = `BZ-INC-${forensicPayload.incident_id}`;
+        }
+    }
 
     const prompt = `
-    You are 'Bayezid-Forensics', a Senior Forensic Analyst.
-    A vulnerability '${vulnName}' was detected and mitigated on target '${targetIp}'.
+    You are 'Bayezid-Scribe', the ultimate Cybersecurity Forensics and RCA (Root Cause Analysis) Agent.
+    An incident has just concluded a full lifecycle (Detection -> Isolation -> Patch -> Red Team Test -> Swarm Assimilation).
     
-    Logs collected during the incident:
-    ${logsSnippet}
+    Here is the complete telemetry of the battle:
+    ---
+    ${payloadStr}
+    ---
 
     Your Task:
-    1. Identify the 'Root Cause' (e.g., Unsanitized input, outdated library, misconfigured permission).
-    2. Suggest a permanent long-term hardening strategy (Strategic Fix).
-    3. Determine the 'Potential Impact' if this hadn't been caught.
+    Generate a highly professional, highly detailed, Enterprise-Grade Incident Response & Forensics Report in MARKDOWN format.
+    The report MUST include:
+    # 🚨 Incident Response & Forensics Report
+    ## 1. Executive Summary
+    (Include Incident ID, Threat Type, Severity, and Attacker OSINT details)
+    ## 2. The Initial Vector
+    (How the attack started, based on logs/payload)
+    ## 3. Kinetic & Cognitive Response
+    (What the OS/eBPF did to block it, and the AI Autopsy results)
+    ## 4. The Mitigation (Blue Forge)
+    (The Regex/Playbook deployed)
+    ## 5. Red Team Verification (Crucible)
+    (The Alchemist's attempt to bypass the patch and the result)
+    ## 6. Root Cause Analysis (RCA)
+    (Why the vulnerability existed in the first place)
+    ## 7. Strategic Long-Term Hardening
+    (Actionable steps to prevent future occurrences)
 
-    Strictly return JSON:
-    {
-        "root_cause": "...",
-        "strategic_fix": "...",
-        "potential_impact": "..."
-    }`;
+    Rules:
+    - Do not use generic templates. Synthesize the EXACT data provided in the telemetry.
+    - Write as a battle-hardened Tier 3 SOC Analyst.
+    - CRITICAL: Return ONLY the raw Markdown text. Do not wrap it in JSON. Do not write markdown blocks like \`\`\`markdown, just the raw text.
+    - CRITICAL MERMAID RULE: You MUST wrap all node text in double quotes inside Mermaid graphs to prevent parsing errors with parentheses or special characters (e.g., use A["Text"] instead of A[Text], and F(("Text (Inner)")) instead of F((Text (Inner))) ).
+    `;
 
     try {
-        return await askRedSwarmAI(prompt, true);
+        const mdReport = await askRedSwarmAI(prompt, false);
+
+        const reportsDir = path.join(__dirname, 'forensics_reports');
+        if (!fs.existsSync(reportsDir)) {
+            fs.mkdirSync(reportsDir, { recursive: true });
+        }
+
+        const fileName = `Forensics_Report_${incidentId}.md`;
+        const filePath = path.join(reportsDir, fileName);
+
+        fs.writeFileSync(filePath, mdReport);
+        console.log(`[📁] ARCHIVE: Master Forensic Report forged successfully and saved to: ${filePath}`);
+
+        return {
+            reportPath: filePath,
+            summary: "Forensic Markdown Generated successfully.",
+            markdown: mdReport
+        };
+
     } catch (error) {
-        console.error("[-] Forensics Error:", error.message);
-        return null;
+        console.error("[-] Forensics Scribe Error:", error.message);
+        return { reportPath: null, error: error.message };
     }
 };
 

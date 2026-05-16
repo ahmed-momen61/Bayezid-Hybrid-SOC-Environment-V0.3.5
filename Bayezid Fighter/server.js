@@ -79,217 +79,251 @@ app.get('/api/v1/alerts', async(req, res) => {
     }
 });
 
+
+
 const handleSecurityAlert = async(req, res) => {
     let source_ip, event_type, target_server;
     let rawData = req.body;
+
+    let evidence_payload = req.body.evidence || req.body.payload || (typeof rawData === 'string' ? rawData : JSON.stringify(rawData));
+    let detected_by = req.body.detectedBy || req.body.detected_by || "Bayezid Omni-Ingest";
+    let severity_level = req.body.severity || "HIGH";
 
     let requested_engine = process.env.AI_MODE || 'LOCAL';
     const isJson = req.headers['content-type'] === 'application/json';
 
     if (isJson) {
-        source_ip = req.body.source_ip;
-        event_type = req.body.event_type || "Security Alert";
-        target_server = req.body.target_server || "Unknown";
-
-        if (req.body.engine) {
-            requested_engine = req.body.engine.toUpperCase();
-        }
-        console.log(`\n[+] Received Structured Alert: ${event_type} from ${source_ip}`);
-        console.log(`[🎛️] Engine Selected: ${requested_engine}`);
-
+        source_ip = req.body.sourceIp || req.body.source_ip || req.body.targetIp || req.ip || "Unknown";
+        event_type = req.body.vulnName || req.body.event_type || "Security Alert";
+        target_server = req.body.targetIp || req.body.target_server || "Unknown";
+        if (req.body.engine) requested_engine = req.body.engine.toUpperCase();
+        console.log(`\n[+] Received Structured Threat: ${event_type} from ${source_ip}`);
     } else {
         const logPreview = typeof rawData === 'string' ? rawData.substring(0, 50) : 'Invalid Format';
         console.log(`\n[+] Received Raw Log Data: ${logPreview}...`);
-        source_ip = "Extracting...";
+        source_ip = req.ip || "Unknown";
         event_type = "Raw Log Analysis";
         target_server = "Detecting...";
-
-        if (req.query.engine) {
-            requested_engine = req.query.engine.toUpperCase();
-            console.log(`[🎛️] Engine Selected by URL: ${requested_engine}`);
-        }
+        if (req.query.engine) requested_engine = req.query.engine.toUpperCase();
     }
 
     try {
-        if (isJson && source_ip !== "Extracting...") {
-            const timeLimit = new Date(Date.now() - 60 * 60 * 1000);
 
-            const existingAlert = await prisma.alert.findFirst({
-                where: {
-                    sourceIp: source_ip,
-                    createdAt: { gte: timeLimit }
-                },
-                orderBy: { createdAt: 'desc' }
-            });
+        let mlFeatures = { entropy: "N/A", symbols: "N/A", keywords: "N/A" };
+        let mlScore = "Regex Match";
+        let isSuspiciousTraffic = false;
 
-            if (existingAlert) {
-                console.log(`\n[♻️] CACHE HIT: Attack from ${source_ip} is already tracked! (Alert ID: ${existingAlert.id})`);
-                console.log(`[!] Current Status: ${existingAlert.status}. Skipping AI Analysis & Playbooks.`);
+        if (source_ip !== "Extracting..." && source_ip !== "Unknown") {
+            const kineticTriage = await analyzeLogFastLive(source_ip, rawData);
+            if (kineticTriage.isSuspicious) {
+                isSuspiciousTraffic = true;
+                if (kineticTriage.reason && kineticTriage.reason.includes("(Cached)")) {
+                    console.log(`[🛡️] Shield Active: Redundant anomaly from ${source_ip} suppressed by Intelligence Cache.`);
+                    return res.json({ status: "blocked", message: "Attack suppressed by Intelligence Cache.", reason: kineticTriage.reason });
+                }
 
-                await prisma.alert.update({
-                    where: { id: existingAlert.id },
-                    data: { attempts: (existingAlert.attempts || 1) + 1 }
-                });
+                console.log(`[🚨] Kinetic Filter Alert: ${kineticTriage.reason}. Escalating to Cognitive AI Engine!`);
+                console.log(`[⚔️] KINETIC ENGAGEMENT: Malicious signature detected. Triggering KernelStriker!`);
+                await KernelStriker.blockIp(source_ip);
+                console.log(`[🛡️] OS LEVEL SHIELD ACTIVE: IP ${source_ip} dropped via eBPF/Firewall.`);
 
-                return res.status(200).json({
-                    status: 'success',
-                    cached: true,
-                    message: "Threat is already tracked and handled by the SOC.",
-                    alert_status: existingAlert.status,
-                    analysis: {
-                        threat_type: existingAlert.threatType,
-                        severity: existingAlert.severity
-                    },
-                    playbook_executed: false,
-                    playbook_details: "Skipped (Duplicate Activity)"
-                });
+                if (kineticTriage.ml_analysis) {
+                    mlFeatures = kineticTriage.ml_analysis.features_extracted || mlFeatures;
+                    mlScore = kineticTriage.ml_analysis.score || mlScore;
+                }
+            } else if (!isJson || (!req.body.vulnName && !req.body.event_type)) {
+                console.log(`[♻️] Kinetic Filter Dropped Event: ${kineticTriage.reason}`);
+                return res.json({ status: "ignored", message: kineticTriage.reason });
             }
         }
 
 
-        if (isJson) {
-            const logsToEmbed = typeof rawData === 'string' ? rawData : JSON.stringify(rawData);
-            const pastIncident = await findSimilarIncidents(logsToEmbed);
+        let wardenReport = null;
+        let oracleReport = { aiAnalysis: "Pending", obfuscation: "Unknown" };
 
-            if (pastIncident) {
-                console.log(`\n[♻️] MEMORY HIT: Similar attack found! Match: ${(pastIncident.similarity * 100).toFixed(1)}%`);
-                console.log(`[♻️] Past Incident ID: ${pastIncident.id} | Threat: ${pastIncident.threatType}`);
+        if (evidence_payload && (evidence_payload.includes('bash') || evidence_payload.includes('wget') || evidence_payload.length > 50)) {
+            if (typeof runWardenSandbox === 'function') {
+                wardenReport = await runWardenSandbox(evidence_payload);
 
-                const vectorAlert = await prisma.alert.create({
-                    data: {
-                        sourceIp: source_ip,
-                        targetServer: target_server,
-                        eventType: event_type,
-                        status: "RESOLVED_BY_MEMORY",
-                        threatType: pastIncident.threatType
-                    }
-                });
-
-                return res.status(200).json({
-                    status: 'success',
-                    cached: true,
-                    message: "Similar threat identified in institutional memory.",
-                    similarity_score: `${(pastIncident.similarity * 100).toFixed(1)}%`,
-                    historical_reference: pastIncident.id,
-                    action_taken: "Applied historical playbook implicitly.",
-                    alert_id: vectorAlert.id
-                });
+                if (wardenReport && wardenReport.isMalicious) {
+                    console.log(`\n[☠️] WARDEN ALERT: Payload verified as ${wardenReport.threatType} (Score: ${wardenReport.riskScore})`);
+                    console.log(`[☠️] Verdict: ${wardenReport.sandboxVerdict}`);
+                    severity_level = "CRITICAL";
+                    event_type = `[Sandbox Verified] ${wardenReport.threatType} via ${event_type}`;
+                    console.log(`[🐝] WARDEN -> ML SYNC: Sending malicious payload to ML Swarm Memory...`);
+                    axios.post('http://127.0.0.1:8000/api/v1/ml/swarm_feedback', { payload: evidence_payload }).catch(e => console.log("[-] Swarm sync failed."));
+                } else if (wardenReport && !wardenReport.isMalicious) {
+                    console.log(`[🧠] Warden analysis confirmed safe. Sending feedback to ML Sniper to learn this pattern...`);
+                    axios.post('http://127.0.0.1:8000/api/v1/ml/feedback', { payload: evidence_payload }).catch(e => console.log("[-] Feedback loop failed."));
+                }
             }
+        }
+
+        if (typeof OracleReverser !== 'undefined' && OracleReverser.analyzePayload) {
+            oracleReport = await OracleReverser.analyzePayload(evidence_payload || "");
+            console.log(`[👁️] Oracle Insight: ${oracleReport.aiAnalysis}`);
+        }
+
+
+        let ticketId = `BZ-INC-${Date.now()}`;
+        if (typeof itsmService !== 'undefined' && itsmService.createTicket) {
+            ticketId = await itsmService.createTicket(event_type, severity_level, target_server).catch(() => ticketId);
         }
 
         const savedAlert = await prisma.alert.create({
             data: { sourceIp: source_ip, targetServer: target_server, eventType: event_type, status: "NEW" }
         });
-        console.log(`[*] Logged to Cloud DB (ID: ${savedAlert.id})`);
 
-        let osintData = null;
-        if (isJson && source_ip !== "Extracting...") {
-            osintData = await enrichWithOSINT(source_ip);
-        }
+        let vulnRecordId = null;
+        try {
+            if (req.body.vulnName) {
+                const vuln = await prisma.vulnerabilityBridge.create({
+                    data: { vulnName: event_type, severity: severity_level, detectedBy: detected_by, targetIp: target_server, evidence: evidence_payload, ticketId: ticketId }
+                });
+                vulnRecordId = vuln.id;
+            }
+        } catch (e) { console.log("[-] Bridge record skip"); }
+
+        try {
+            console.log(`[🔐] Evidence Encrypted & Stored in Vault.`);
+            let encryptedDataStr = evidence_payload;
+            let ivStr = "N/A";
+            if (typeof encryptEvidence === 'function') {
+                const encResult = encryptEvidence(evidence_payload);
+                encryptedDataStr = encResult.encryptedData;
+                ivStr = encResult.iv;
+            }
+
+            let hashStr = "N/A";
+            if (typeof hashEvidence === 'function') {
+                hashStr = hashEvidence(evidence_payload + Date.now().toString());
+            }
+
+            await prisma.evidenceVault.create({
+                data: { incidentId: vulnRecordId || savedAlert.id.toString(), evidenceType: "PAYLOAD", encryptedData: encryptedDataStr, iv: ivStr, sha256Hash: hashStr, collectedBy: detected_by || "System" }
+            }).catch(() => {});
+        } catch (e) { console.log("[-] Evidence Vault Save Skipped"); }
 
         const payloadForAI = isJson ? req.body : rawData;
         let aiResponse;
 
         if (requested_engine === 'CLOUD' || requested_engine === 'VERTEX' || requested_engine === 'GEMINI') {
-            console.log(`[🚀] Primary Engine Route: CLOUD AI`);
             aiResponse = await analyzeWithVertexAI(payloadForAI);
-
-            if (aiResponse.engine_used.includes('Fail-safe')) {
-                console.log('\n[🚨] CLOUD DOWN! Auto-switching to Local AI (Standby Mode)...');
-                aiResponse = await analyzeWithLocalModel(payloadForAI);
-                aiResponse.engine_used += ' (Recovered from Cloud Failure 🔁)';
-            }
+            if (aiResponse.engine_used.includes('Fail-safe')) aiResponse = await analyzeWithLocalModel(payloadForAI);
         } else {
-            console.log(`[🚀] Primary Engine Route: LOCAL AI`);
             aiResponse = await analyzeWithLocalModel(payloadForAI);
-
-            if (aiResponse.engine_used.includes('Fail-safe')) {
-                console.log('\n[🚨] LOCAL DOWN! Auto-switching to Cloud AI (Standby Mode)...');
-                aiResponse = await analyzeWithVertexAI(payloadForAI);
-                aiResponse.engine_used += ' (Recovered from Local Failure 🔁)';
-            }
+            if (aiResponse.engine_used.includes('Fail-safe')) aiResponse = await analyzeWithVertexAI(payloadForAI);
         }
 
-        if (!isJson && aiResponse.extracted_ip && aiResponse.extracted_ip !== "Unknown" && aiResponse.extracted_ip !== "Extracting...") {
-            osintData = await enrichWithOSINT(aiResponse.extracted_ip);
-        }
-
+        const final_ip = aiResponse.extracted_ip && aiResponse.extracted_ip !== "Unknown" ? aiResponse.extracted_ip : source_ip;
+        let osintData = await enrichWithOSINT(final_ip);
         let ctiData = null;
+
         if (aiResponse.extracted_iocs || (aiResponse.related_cves && aiResponse.related_cves.length > 0)) {
             ctiData = await enrichWithCTI(aiResponse.extracted_iocs, aiResponse.related_cves);
         }
 
-        let alertStatus = "ANALYZED";
-        if (aiResponse.is_false_positive) {
-            alertStatus = "FALSE_POSITIVE";
-        } else if (aiResponse.confidence_type === 'PROBABILISTIC') {
-            alertStatus = "WAITING_FOR_APPROVAL";
-        }
+        let alertStatus = aiResponse.is_false_positive ? "FALSE_POSITIVE" : (aiResponse.confidence_type === 'PROBABILISTIC' ? "WAITING_FOR_APPROVAL" : "ANALYZED");
 
-        const updatedAlert = await prisma.alert.update({
+        await prisma.alert.update({
             where: { id: savedAlert.id },
             data: {
-                sourceIp: aiResponse.extracted_ip || source_ip,
-                severity: aiResponse.severity,
+                sourceIp: final_ip,
+                severity: (wardenReport && wardenReport.isMalicious) ? 'CRITICAL' : aiResponse.severity,
                 threatType: aiResponse.threat_type,
                 recommendedAction: aiResponse.recommended_action,
-                confidenceType: aiResponse.confidence_type || "PROBABILISTIC",
-                cvssScore: aiResponse.cvss_score,
-                cweId: aiResponse.cwe_id,
-                mitreTactic: aiResponse.mitre_attack ? aiResponse.mitre_attack.tactic : null,
-                mitreTechnique: aiResponse.mitre_attack ? aiResponse.mitre_attack.technique : null,
-                killChainPhase: aiResponse.kill_chain_phase,
-                predictedSteps: aiResponse.predicted_next_steps,
-                businessContinuity: aiResponse.business_continuity_analysis,
-                osintData: {
-                    osint: osintData,
-                    cti: ctiData
-                },
+                confidenceType: aiResponse.confidence_type,
+                osintData: { osint: osintData, cti: ctiData },
                 status: alertStatus
             }
         });
-        console.log(`[✔] Cognitive Analysis Saved. Status: ${alertStatus} | Type: ${aiResponse.confidence_type}`);
+
 
         let playbookResult = null;
+        let redTeamVerdict = null;
 
-        const shouldExecutePlaybook = !aiResponse.is_false_positive &&
-            (aiResponse.severity === 'HIGH' || aiResponse.severity === 'CRITICAL') &&
-            (aiResponse.confidence_type === 'DETERMINISTIC');
+        const shouldExecutePlaybook = !aiResponse.is_false_positive && (aiResponse.severity === 'HIGH' || aiResponse.severity === 'CRITICAL') && (aiResponse.confidence_type === 'DETERMINISTIC');
 
         if (shouldExecutePlaybook) {
-            console.log(`[⚡] DETERMINISTIC Threat Detected: Auto-executing Playbook...`);
-            playbookResult = await executePlaybook(updatedAlert.id, aiResponse, isJson ? req.body : { source_ip: aiResponse.extracted_ip });
-            sendTelegramAlert(aiResponse, osintData);
-        } else {
-            if (aiResponse.confidence_type === 'PROBABILISTIC') {
-                console.log(`[✋] PROBABILISTIC Threat Detected: Execution Halted. Sent to War Room for Human Approval.`);
+            console.log(`[⚡] DETERMINISTIC Threat: Auto-executing Playbook and deploying patch...`);
+            playbookResult = await executePlaybook(savedAlert.id, aiResponse, isJson ? req.body : { source_ip: final_ip });
+            if (typeof sendTelegramAlert === 'function') sendTelegramAlert(aiResponse, osintData);
+
+
+            console.log(`[🩸] WAKING RED TEAM: Forging Live Payload to test the new Blue Team Patch...`);
+            const weaponizedPayload = await runZeroDayForgeAgent(aiResponse.threat_type, 1);
+
+            if (weaponizedPayload && weaponizedPayload.weaponizedCode) {
+                console.log(`[🔥] LIVE FIRE: Alchemist attacking ${target_server} to verify patch integrity...`);
+                const attackResult = await executeAlchemistFuzzingLoop(weaponizedPayload.weaponizedCode, target_server, 1);
+
+                if (attackResult && attackResult.bypassed) {
+                    console.log(`[❌] CRITICAL BREACH: Red Team bypassed the Blue Patch! Escalating...`);
+                    if (typeof itsmService !== 'undefined' && itsmService.createJiraTicket) await itsmService.createJiraTicket(`Patch Bypass: ${aiResponse.threat_type}`, "Red Team successfully bypassed the applied mitigation.");
+                    await prisma.alert.update({ where: { id: savedAlert.id }, data: { status: "PATCH_FAILED" } });
+                    redTeamVerdict = "FAILED_BYPASS";
+                } else {
+                    console.log(`[✅] VERIFIED: Red Team neutralized. Patch is bulletproof.`);
+                    await prisma.alert.update({ where: { id: savedAlert.id }, data: { status: "RESOLVED_VERIFIED" } });
+                    redTeamVerdict = "VERIFIED_SECURE";
+
+                    console.log(`[🌐] HYDRA PROTOCOL: Broadcasting immunity signature to the Swarm...`);
+                    if (typeof SwarmCrypto !== 'undefined' && SwarmCrypto.broadcastSignature) {
+                        await SwarmCrypto.broadcastSignature({ threat: aiResponse.threat_type, verified: true });
+                    }
+                }
             } else {
-                console.log(`[!] Playbook Skipped: ${aiResponse.is_false_positive ? "False Positive" : "Low Severity"}`);
+                console.log(`[⚠️] Forge Agent could not construct a valid payload for testing.`);
+                redTeamVerdict = "UNTESTED";
             }
         }
 
-        const logsToSave = isJson ? (typeof rawData === 'string' ? rawData : JSON.stringify(rawData)) : rawData;
-        await saveIncidentToMemory(updatedAlert.id, logsToSave);
+        if (typeof ThreatGrapher !== 'undefined' && ThreatGrapher.generateReport) {
+            ThreatGrapher.generateReport({
+                ticketId: ticketId,
+                attackerIp: final_ip,
+                payload: evidence_payload.substring(0, 100),
+                mlScore: mlScore,
+                wardenStatus: wardenReport ? "Container Analysis Performed" : "Layer 3 Mitigation",
+                mitreTactic: "T1190 - Exploit Public-Facing Application",
+                finalAction: "Omni-Pipeline Execution (WIN32 Block)",
+                severity: severity_level,
+                mlFeatures: mlFeatures,
+                oracleAnalysis: oracleReport.aiAnalysis,
+                obfuscationType: oracleReport.obfuscation
+            });
+        }
+
+        await saveIncidentToMemory(savedAlert.id, evidence_payload);
 
         return res.status(200).json({
             status: 'success',
-            cached: false,
+            ticket_id: ticketId,
+            vulnId: vulnRecordId,
             is_false_positive: aiResponse.is_false_positive,
-            confidence: aiResponse.confidence_score,
             alert_status: alertStatus,
+            warden_sandbox: wardenReport ? wardenReport.sandboxVerdict : "Not Required",
+            oracle_insight: oracleReport.aiAnalysis,
             analysis: aiResponse,
             osint: osintData,
             cti: ctiData,
-            playbook_executed: !!playbookResult,
-            playbook_details: playbookResult || "Skipped (Sent to War Room / Low Severity / False Positive)"
+            playbook_details: playbookResult || "Skipped",
+            red_team_verification: redTeamVerdict,
+            evidence_vault: "Encrypted & Hashed (SHA-256)"
         });
 
     } catch (error) {
-        console.error('[-] Error processing alert:', error);
-        return res.status(500).json({ status: 'error', message: 'Failed to process security data' });
+        console.error('[-] Error in Omni-Pipeline:', error);
+        return res.status(500).json({ status: 'error', message: 'Pipeline failure', details: error.message });
     }
 };
 
+app.post('/api/v1/alerts/ingest', handleSecurityAlert);
+
+app.post('/api/v1/bridge/report-vuln', (req, res) => {
+    console.log(`\n[🌉] FUSION PROTOCOL: Vulnerability Report Proxy Triggered.`);
+    handleSecurityAlert(req, res);
+});
 app.post('/api/v1/alerts/ingest', handleSecurityAlert);
 
 
@@ -324,7 +358,7 @@ app.post('/api/v1/alerts/:id/chat', async(req, res) => {
 
             const alertData = await prisma.alert.findUnique({ where: { id: alertId } });
 
-            const aiService = require('./aiService'); // استدعاء لحظي (Dynamic Require) لتجنب اللغبطة
+            const aiService = require('./aiService');
             const aiDecision = await aiService.runActionAgent(alertData, message);
 
             if (aiDecision) {
@@ -359,58 +393,36 @@ app.post('/api/v1/alerts/:id/chat', async(req, res) => {
     }
 });
 
-const handleSimulationRun = async(req, res) => {
-    const { attackType, logFormat, logData, parameters } = req.body;
 
-    console.log(`\n[🧪] Received Simulation Request: ${attackType}`);
+const handleLiveFireDrill = async(req, res) => {
+    const { attackType, targetAsset } = req.body;
+
+    console.log(`\n[🔥] LIVE FIRE DRILL INITIATED: Launching ${attackType} against ${targetAsset || 'localhost'}`);
 
     try {
-        let parsedLogs;
+        const forgeResult = await runZeroDayForgeAgent(`Create a ${attackType} exploit payload`, 1);
 
-        if (logFormat === 'json') {
-            try {
-                parsedLogs = typeof logData === 'string' ? JSON.parse(logData) : logData;
-            } catch (e) {
-                return res.status(400).json({ error: 'Invalid JSON format in logData' });
-            }
-        } else if (logFormat === 'raw') {
-            parsedLogs = logData.split('\n').filter(line => line.trim() !== '');
+        if (forgeResult && forgeResult.weaponizedCode) {
+            console.log(`[⚔️] Exploit Forged. Firing at target...`);
+
+            const attackResult = await executeAlchemistFuzzingLoop(forgeResult.weaponizedCode, targetAsset || 'localhost', 1);
+
+            return res.status(200).json({
+                status: "success",
+                message: "Live round fired. Monitoring Kinetic Filter for interception.",
+                forge_report: forgeResult,
+                attack_outcome: attackResult
+            });
         } else {
-            return res.status(400).json({ error: 'Invalid log format selected' });
+            return res.status(500).json({ error: "Forge failed to create live payload." });
         }
-
-        const simulationAlert = await prisma.alert.create({
-            data: {
-                sourceIp: "SIMULATION-TEST",
-                targetServer: "Local-Env",
-                eventType: `Simulated: ${attackType}`,
-                status: "ANALYZED",
-                severity: "INFO",
-                threatType: "Simulation Activity",
-                recommendedAction: "Review simulated logs and parameters",
-                osintData: parameters ? { custom_parameters: parameters } : null
-            }
-        });
-
-        console.log(`[✔] Simulation Logged to DB (ID: ${simulationAlert.id})`);
-
-        res.status(200).json({
-            status: 'success',
-            message: 'Simulation executed and logged successfully',
-            data: {
-                attackType,
-                parsedLogs,
-                recordId: simulationAlert.id
-            }
-        });
-
     } catch (error) {
-        console.error('[-] Simulation Error:', error);
-        res.status(500).json({ error: 'Simulation processing failed' });
+        console.error("[-] Live Fire Error:", error);
+        return res.status(500).json({ error: "Drill execution failed." });
     }
 };
 
-app.post('/api/v1/simulation/run', handleSimulationRun);
+app.post('/api/v1/drill/live-fire', handleLiveFireDrill);
 
 app.post('/api/v1/redswarm/engage', async(req, res) => {
     const { targetInfo, currentState } = req.body;
@@ -590,7 +602,6 @@ app.post('/api/v1/redswarm/auto-pilot', async(req, res) => {
     console.log(`\n[🚀] INITIATING FULL AUTO-PILOT CAMPAIGN AGAINST: ${targetInfo}`);
     res.status(200).json({ status: 'success', message: 'Campaign started. Overlord is now in control.' });
 
-    //
     (async() => {
         let campaignActive = true;
         let lastScanResults = "";
@@ -638,103 +649,39 @@ app.post('/api/v1/redswarm/auto-pilot', async(req, res) => {
 });
 
 app.post('/api/v1/bridge/report-vuln', async(req, res) => {
-    const {
-        vulnName = "Unknown Suspicious Traffic",
-            severity = "HIGH",
-            targetIp = req.ip || "127.0.0.1",
-            detectedBy = "Bayezid ML Sniper",
-            evidence = ""
-    } = req.body;
+    console.log(`\n[🌉] FUSION PROTOCOL: Vulnerability Report Proxy Triggered.`);
 
+    const mockReq = {
+        body: {
+            ...req.body,
+            source_ip: req.body.sourceIp || req.body.targetIp || req.ip || "Unknown",
+            event_type: req.body.vulnName || "Vulnerability Scan Report",
+            target_server: req.body.targetIp || "127.0.0.1",
+            payload: req.body.evidence || "No payload provided",
+            detected_by: req.body.detectedBy || "Bayezid Bridge"
+        },
+        ip: req.ip,
+        headers: { 'content-type': 'application/json' },
+        query: req.query || {}
+    };
 
-    const sourceIp = req.ip || req.connection.remoteAddress || targetIp || "Unknown";
-    console.log(`\n[⚡] Kinetic Filter analyzing incoming telemetry from ${sourceIp}...`);
-
-    const clientIp = req.ip || req.connection.remoteAddress || "127.0.0.1";
-    const triageResult = await analyzeLogFastLive(clientIp, req.body);
-
-    if (!triageResult.isSuspicious) {
-        console.log(`[♻️] Kinetic Filter Dropped Event: ${triageResult.reason}`);
-        return res.json({ status: "ignored", message: triageResult.reason });
-    }
-
-    if (triageResult.isSuspicious) {
-        if (triageResult.reason && triageResult.reason.includes("(Cached)")) {
-            console.log(`[🛡️] Shield Active: Redundant anomaly from ${clientIp} suppressed by Intelligence Cache.`);
-            return res.json({
-                status: "blocked",
-                message: "Attack suppressed by Intelligence Cache.",
-                reason: triageResult.reason
+    const mockRes = {
+        status: function(code) { this.statusCode = code; return this; },
+        json: function(data) {
+            console.log(`[🌉] FUSION COMPLETE: Vulnerability routed and processed via Omni-Pipeline.`);
+            return res.status(this.statusCode || 200).json({
+                fusion_route: "Success",
+                original_vuln: req.body.vulnName,
+                omni_result: data
             });
         }
+    };
 
-        console.log(`[🚨] Kinetic Filter Alert: ${triageResult.reason}. Escalating to Cognitive AI Engine!`);
-
-        const targetIpToBlock = req.body.spoofedIp || clientIp;
-        KernelStriker.blockIp(targetIpToBlock);
-
-        let wardenReport = null;
-        if (evidence && (evidence.includes('bash') || evidence.includes('wget') || evidence.length > 50)) {
-            wardenReport = await runWardenSandbox(evidence);
-
-            if (wardenReport && wardenReport.isMalicious) {
-                console.log(`\n[☠️] WARDEN ALERT: Payload verified as ${wardenReport.threatType} (Score: ${wardenReport.riskScore})`);
-                console.log(`[☠️] Verdict: ${wardenReport.sandboxVerdict}`);
-
-                req.body.severity = "CRITICAL";
-                req.body.vulnName = `[Sandbox Verified] ${wardenReport.threatType} via ${vulnName}`;
-            }
-        }
-
-        if (wardenReport && !wardenReport.isMalicious) {
-            console.log(`[🧠] Warden analysis confirmed safe. Sending feedback to ML Sniper to learn this pattern...`);
-            axios.post('http://127.0.0.1:8000/api/v1/ml/feedback', {
-                payload: evidence
-            }).catch(e => console.log("[-] Feedback loop failed: ML Sniper might be offline."));
-        }
-
-        try {
-            const ticketId = await itsmService.createTicket(vulnName, severity, targetIp);
-
-            const vuln = await prisma.vulnerabilityBridge.create({
-                data: { vulnName, severity, detectedBy, targetIp, evidence, ticketId }
-            });
-
-            const { iv, encryptedData } = encryptEvidence(evidence);
-            const sha256Hash = hashEvidence(evidence + Date.now().toString());
-
-            await prisma.evidenceVault.create({
-                data: { incidentId: vuln.id, evidenceType: "PAYLOAD", encryptedData, iv, sha256Hash, collectedBy: detectedBy || "System" }
-            });
-
-            console.log(`[🚨] Red Team reported: ${vulnName} (${severity})`);
-            console.log(`[🔐] Evidence Encrypted & Stored in Vault.`);
-
-            const oracleReport = await OracleReverser.analyzePayload(req.body.evidence || "");
-            console.log(`[👁️] Oracle Insight: ${oracleReport.aiAnalysis}`);
-
-            ThreatGrapher.generateReport({
-                ticketId: ticketId || `BZ-INC-${Date.now()}`,
-                attackerIp: req.body.spoofedIp || clientIp,
-                payload: req.body.evidence || "Obfuscated Payload",
-                mlScore: triageResult.ml_analysis ? triageResult.ml_analysis.score : "Regex Match",
-                wardenStatus: wardenReport ? "Container Analysis Performed" : "Layer 3 Mitigation",
-                mitreTactic: "T1190 - Exploit Public-Facing Application",
-                finalAction: "OS Network Striker (WIN32 Block)",
-                severity: severity || "HIGH",
-                mlFeatures: triageResult.ml_analysis && triageResult.ml_analysis.features_extracted ? {
-                    entropy: triageResult.ml_analysis.features_extracted.entropy,
-                    symbols: triageResult.ml_analysis.features_extracted.special_chars,
-                    keywords: triageResult.ml_analysis.features_extracted.keyword_count
-                } : { entropy: "N/A", symbols: "N/A", keywords: "N/A" },
-                oracleAnalysis: oracleReport.aiAnalysis,
-                obfuscationType: oracleReport.obfuscation
-            });
-
-            res.json({ status: "success", vulnId: vuln.id, ticketId: ticketId, message: "Vulnerability reported & Ticket Created." });
-        } catch (error) {
-            res.status(500).json({ error: error.message });
-        }
+    try {
+        await handleSecurityAlert(mockReq, mockRes);
+    } catch (error) {
+        console.error("[-] Fusion Routing Error:", error);
+        res.status(500).json({ error: "Failed to route into Omni-Pipeline" });
     }
 });
 
@@ -771,7 +718,7 @@ app.post('/api/v1/bridge/approve-fix', async(req, res) => {
         if (!vuln) return res.status(404).json({ error: "Vulnerability not found" });
 
         if (userId) {
-            const user = await prisma.user.findUnique({ where: { id: String(userId) } }); // استخدمنا String عشان نتفادى إيرور الـ Int
+            const user = await prisma.user.findUnique({ where: { id: String(userId) } });
             if (user) {
                 const fixData = JSON.parse(vuln.suggestedFix || "{}");
                 const remediationCode = fixData.remediation_code || "Unknown";
