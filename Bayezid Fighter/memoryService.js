@@ -7,9 +7,25 @@ const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
 const { IndexFlatL2 } = require('faiss-node');
 const { createClient } = require('redis');
 
-const redisClient = createClient({ url: process.env.REDIS_URL || 'redis://localhost:6379' });
-redisClient.on('error', (err) => console.error('[-] Redis Live-Bus Error:', err));
-redisClient.connect().then(() => console.log(`[⚡] Live-Stream Memory Bus (Redis) Active.`));
+const redisClient = createClient({
+    url: process.env.REDIS_URL || 'redis://localhost:6379',
+    socket: { reconnectStrategy: false }
+});
+redisClient.on('error', (err) => {
+    if (err && err.code === 'ECONNREFUSED') return;
+    console.error('[-] Redis Live-Bus Error:', err);
+});
+(async() => {
+    try {
+        try {
+            require('child_process').execSync('docker start bayezid-redis', { stdio: 'ignore' });
+        } catch (e) {}
+        await redisClient.connect();
+        console.log(`[⚡] Live-Stream Memory Bus (Redis) Active.`);
+    } catch (err) {
+        console.log(`[⚠️] Redis Live-Bus Offline: Running in degraded mode without pub/sub.`);
+    }
+})();
 
 const dimension = 768;
 const faissIndex = new IndexFlatL2(dimension);

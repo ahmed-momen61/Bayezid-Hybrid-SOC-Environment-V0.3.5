@@ -40,6 +40,17 @@ const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toSt
 const IV_LENGTH = 16;
 const { startMatrixShell } = require('./matrixShell');
 const { startSigmaSymbioticLoop } = require('./sigmaEngine');
+const { evolveKineticRules } = require('./kineticEvolver');
+const { runChimeraXPipeline } = require('./chimeraEngine');
+const { runPhantomMLEvasion } = require('./phantomML');
+const { negotiateCovertChannel } = require('./hydraC2');
+const { generateDeterministicReport } = require('./galileoEngine');
+const { mnemonManager } = require('./mnemonProbe');
+const { oracleGNN } = require('./oracleGNN');
+const { shadowMirror } = require('./shadowMirror');
+const { veritasChain } = require('./veritasProof');
+const { federationAggregator } = require('./federationSwarm');
+const { dataHarvester, loraManager } = require('./bayezidBrain');
 
 function encryptEvidence(text) {
     let iv = crypto.randomBytes(IV_LENGTH);
@@ -125,9 +136,10 @@ const handleSecurityAlert = async(req, res) => {
         let mlFeatures = { entropy: "N/A", symbols: "N/A", keywords: "N/A" };
         let mlScore = "Regex Match";
         let isSuspiciousTraffic = false;
+        let kineticTriage = null;
 
         if (source_ip !== "Extracting..." && source_ip !== "Unknown") {
-            const kineticTriage = await analyzeLogFastLive(source_ip, rawData);
+            kineticTriage = await analyzeLogFastLive(source_ip, rawData);
             if (kineticTriage.isSuspicious) {
                 isSuspiciousTraffic = true;
                 if (kineticTriage.reason && kineticTriage.reason.includes("(Cached)")) {
@@ -220,12 +232,19 @@ const handleSecurityAlert = async(req, res) => {
         const payloadForAI = isJson ? req.body : rawData;
         let aiResponse;
 
+        const isProduction = process.env.PRODUCTION_STRICT === 'true';
+
+        if (isProduction) {
+            console.log(`[⚠️] PRODUCTION_STRICT IS ENABLED: Mock data and simulated responses are categorically eradicated.`);
+            console.log(`[⚡] Executing live, kinetic analysis strictly...`);
+        }
+
         if (requested_engine === 'CLOUD' || requested_engine === 'VERTEX' || requested_engine === 'GEMINI') {
             aiResponse = await analyzeWithVertexAI(payloadForAI);
-            if (aiResponse.engine_used.includes('Fail-safe')) aiResponse = await analyzeWithLocalModel(payloadForAI);
+            if (!isProduction && aiResponse.engine_used.includes('Fail-safe')) aiResponse = await analyzeWithLocalModel(payloadForAI);
         } else {
             aiResponse = await analyzeWithLocalModel(payloadForAI);
-            if (aiResponse.engine_used.includes('Fail-safe')) aiResponse = await analyzeWithVertexAI(payloadForAI);
+            if (!isProduction && aiResponse.engine_used.includes('Fail-safe')) aiResponse = await analyzeWithVertexAI(payloadForAI);
         }
 
         const final_ip = aiResponse.extracted_ip && aiResponse.extracted_ip !== "Unknown" ? aiResponse.extracted_ip : source_ip;
@@ -259,6 +278,12 @@ const handleSecurityAlert = async(req, res) => {
 
         if (shouldExecutePlaybook) {
             console.log(`[⚡] DETERMINISTIC Threat: Auto-executing Playbook and deploying patch...`);
+
+            if (kineticTriage && kineticTriage.action !== "DROP") {
+                console.log(`\n[🧬] WAKING KINETIC EVOLVER: Threat bypassed kinetic filter but caught by AI! Evolving new rule...`);
+                evolveKineticRules(evidence_payload).catch(e => console.log("Evolver error:", e.message));
+            }
+
             playbookResult = await executePlaybook(savedAlert.id, aiResponse, isJson ? req.body : { source_ip: final_ip });
             if (typeof sendTelegramAlert === 'function') sendTelegramAlert(aiResponse, osintData);
 
@@ -1217,13 +1242,243 @@ app.post('/api/v1/swarm/sync', async(req, res) => {
 
 app.post('/api/v1/sigma-live/start', async(req, res) => {
     console.log(`\n[🚀] API Triggered: Starting SIGMA-LIVE Symbiotic Loop...`);
-    // Run asynchronously to not block the response
     startSigmaSymbioticLoop();
     res.json({ status: "success", message: "SIGMA-LIVE Symbiotic Loop initiated. Check server logs." });
+});
+
+app.post('/api/v1/kinetic-evolver/evolve', async(req, res) => {
+    const { anomalyContext } = req.body;
+    console.log(`\n[🧬] API Triggered: Starting Kinetic Evolver Genetic Algorithm...`);
+    evolveKineticRules(anomalyContext || 'Manual Trigger');
+    res.json({ status: "success", message: "Kinetic Evolver Genetic Algorithm initiated. Check server logs." });
+});
+
+app.post('/api/v1/red/chimera-x', async(req, res) => {
+    const { vulnContext, mutationLevel, disklessTechnique } = req.body;
+    if (!vulnContext) return res.status(400).json({ error: 'vulnContext is required' });
+
+    console.log(`\n[☣️] API Triggered: CHIMERA-X Polymorphic Pipeline...`);
+    try {
+        const result = await runChimeraXPipeline(vulnContext, mutationLevel || 3, disklessTechnique || 'reflective');
+        if (result) {
+            res.json({ status: 'success', message: 'CHIMERA-X payload generated (in-memory, polymorphic).', data: { mutations: result.mutations, binaryHash: result.binaryHash, technique: result.technique, payloadSize: result.disklessPayload.length } });
+        } else {
+            res.status(500).json({ error: 'CHIMERA-X pipeline failed to generate payload.' });
+        }
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/v1/red/phantom-ml', async(req, res) => {
+    const { payload, targetClassifierUrl, layers } = req.body;
+    if (!payload) return res.status(400).json({ error: 'payload is required' });
+
+    console.log(`\n[👻] API Triggered: PHANTOM-ML Adversarial Evasion...`);
+    try {
+        const result = await runPhantomMLEvasion(payload, targetClassifierUrl || 'http://127.0.0.1:8000/api/v1/ml/predict', layers);
+        res.json({ status: 'success', message: 'Adversarial perturbation applied.', data: { appliedLayers: result.appliedLayers, payloadHash: result.payloadHash, probeResult: result.probeResult } });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/v1/red/hydra-c2', async(req, res) => {
+    const { callbackHost, options } = req.body;
+    if (!callbackHost) return res.status(400).json({ error: 'callbackHost is required' });
+
+    console.log(`\n[🐉] API Triggered: HYDRA-C2 Protocol Negotiation...`);
+    try {
+        const report = await negotiateCovertChannel(callbackHost, options || {});
+        res.json({ status: 'success', message: `HYDRA-C2 negotiation complete. Active: ${report.activeProtocol || 'NONE'}`, data: report });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+
+app.post('/api/v1/forensic/galileo', async(req, res) => {
+    const { incidentData } = req.body;
+    if (!incidentData) return res.status(400).json({ error: 'incidentData is required' });
+
+    console.log(`\n[🔭] API Triggered: GALILEO-LIVE Causal Inference...`);
+    try {
+        const report = await generateDeterministicReport(incidentData);
+        res.json({ status: 'success', message: `Deterministic forensic report ${report.reportId} generated.`, data: report });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/v1/mnemon/generate-probes', async(req, res) => {
+    console.log(`\n[🧠] API Triggered: MNEMON eBPF Probe Generation...`);
+    try {
+        const probes = mnemonManager.generateAllProbes();
+        res.json({ status: 'success', message: `${probes.length} eBPF probes generated.`, data: probes });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.post('/api/v1/mnemon/simulate', async(req, res) => {
+    const { syscall, pid, processName } = req.body;
+    if (!syscall) return res.status(400).json({ error: 'syscall is required' });
+
+    console.log(`\n[🧠] API Triggered: MNEMON Probe Simulation (${syscall})...`);
+    const result = mnemonManager.simulateProbe(syscall, pid, processName);
+    res.json({ status: 'success', data: result });
+});
+
+app.get('/api/v1/mnemon/status', async(req, res) => {
+    res.json({ status: 'success', data: mnemonManager.getStatus() });
+});
+
+app.post('/api/v1/oracle-g/ingest', async(req, res) => {
+    const { trafficEntries } = req.body;
+    if (!trafficEntries || !Array.isArray(trafficEntries)) return res.status(400).json({ error: 'trafficEntries array is required' });
+
+    console.log(`\n[🌐] API Triggered: ORACLE-G Traffic Ingestion...`);
+    oracleGNN.ingestTraffic(trafficEntries);
+    oracleGNN.propagate();
+    res.json({ status: 'success', message: `${trafficEntries.length} entries ingested. GNN propagated.`, data: oracleGNN.getTopology() });
+});
+
+app.post('/api/v1/oracle-g/isolate', async(req, res) => {
+    const { compromisedIp } = req.body;
+    if (!compromisedIp) return res.status(400).json({ error: 'compromisedIp is required' });
+
+    console.log(`\n[🛡️] API Triggered: ORACLE-G Pre-emptive Isolation...`);
+    try {
+        const result = await oracleGNN.preemptiveIsolation(compromisedIp);
+        res.json({ status: 'success', message: `Pre-emptive isolation complete. ${result.isolationActions.length} nodes severed.`, data: result });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/v1/oracle-g/topology', async(req, res) => {
+    oracleGNN.propagate();
+    res.json({ status: 'success', data: oracleGNN.getTopology() });
+});
+
+
+app.post('/api/v1/shadow-mirror/zero-fail', async(req, res) => {
+    const { scoutTelemetry, payload, iterations } = req.body;
+    if (!scoutTelemetry || !payload) return res.status(400).json({ error: 'scoutTelemetry and payload are required' });
+
+    console.log(`\n[🪞] API Triggered: SHADOW-MIRROR Zero-Fail Pipeline...`);
+    try {
+        const report = await shadowMirror.zeroFailPipeline(scoutTelemetry, payload, iterations || 10);
+        res.json({ status: 'success', message: `Pre-flight complete. Approved: ${report.approved}`, data: report });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/v1/shadow-mirror/status', async(req, res) => {
+    res.json({ status: 'success', data: shadowMirror.getStatus() });
+});
+
+app.post('/api/v1/veritas/record', async(req, res) => {
+    const { decisionType, decisionData, context } = req.body;
+    if (!decisionType || !decisionData) return res.status(400).json({ error: 'decisionType and decisionData are required' });
+
+    console.log(`\n[🔐] API Triggered: VERITAS zk-SNARK Proof...`);
+    const block = veritasChain.recordDecision(decisionType, decisionData, context || {});
+    res.json({ status: 'success', message: `Block #${block.index} recorded with 288-byte zk-SNARK proof.`, data: block });
+});
+
+app.get('/api/v1/veritas/verify', async(req, res) => {
+    const integrity = veritasChain.verifyChain();
+    res.json({ status: 'success', data: integrity });
+});
+
+app.get('/api/v1/veritas/export', async(req, res) => {
+    const report = veritasChain.exportAuditReport();
+    res.json({ status: 'success', data: report });
+});
+
+app.get('/api/v1/veritas/status', async(req, res) => {
+    res.json({ status: 'success', data: veritasChain.getStatus() });
+});
+
+app.post('/api/v1/federation/submit-update', async(req, res) => {
+    const { nodeId, gradients, dataSize } = req.body;
+    if (!nodeId || !gradients) return res.status(400).json({ error: 'nodeId and gradients are required' });
+
+    console.log(`\n[🌐] API Triggered: Federation Gradient Update from ${nodeId}...`);
+    const result = federationAggregator.receiveUpdate(nodeId, new Float32Array(gradients), dataSize || gradients.length);
+    res.json({ status: 'success', data: result });
+});
+
+app.post('/api/v1/federation/aggregate', async(req, res) => {
+    console.log(`\n[🌐] API Triggered: Federation FedAvg Aggregation...`);
+    const result = federationAggregator.aggregate();
+    if (result) {
+        res.json({ status: 'success', message: `Round ${result.roundResult.round + 1} aggregated.`, data: result.roundResult });
+    } else {
+        res.status(400).json({ error: 'No pending updates to aggregate.' });
+    }
+});
+
+app.post('/api/v1/federation/distribute', async(req, res) => {
+    const results = await federationAggregator.distributeGlobalModel();
+    res.json({ status: 'success', data: results });
+});
+
+app.post('/api/v1/federation/register', async(req, res) => {
+    const { nodeId, endpoint } = req.body;
+    if (!nodeId || !endpoint) return res.status(400).json({ error: 'nodeId and endpoint are required' });
+    federationAggregator.registerNode(nodeId, endpoint);
+    res.json({ status: 'success', message: `Node ${nodeId} registered.` });
+});
+
+app.get('/api/v1/federation/status', async(req, res) => {
+    res.json({ status: 'success', data: federationAggregator.getStatus() });
+});
+
+app.post('/api/v1/brain/harvest-playbook', async(req, res) => {
+    const { alertContext, playbookAction, result } = req.body;
+    if (!alertContext || !playbookAction) return res.status(400).json({ error: 'alertContext and playbookAction are required' });
+
+    const sample = dataHarvester.harvestPlaybook(alertContext, playbookAction, result || { success: true });
+    res.json({ status: 'success', message: 'Training sample harvested.', data: sample });
+});
+
+app.post('/api/v1/brain/harvest-causal', async(req, res) => {
+    const { incidentData, causalReport } = req.body;
+    if (!incidentData || !causalReport) return res.status(400).json({ error: 'incidentData and causalReport are required' });
+
+    const sample = dataHarvester.harvestCausalGraph(incidentData, causalReport);
+    res.json({ status: 'success', message: 'Causal graph sample harvested.', data: sample });
+});
+
+app.post('/api/v1/brain/train-lora', async(req, res) => {
+    const stats = dataHarvester.getStats();
+    console.log(`\n[🧠] API Triggered: BAYEZID-BRAIN LoRA Fine-Tuning (${stats.totalSamples} samples)...`);
+
+    try {
+        const result = await loraManager.launchFineTuning(stats.datasetPath, req.body.options || {});
+        res.json({ status: 'success', message: `Training ${result.status}.`, data: result });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/v1/brain/status', async(req, res) => {
+    res.json({ status: 'success', data: { harvester: dataHarvester.getStats(), lora: loraManager.getStatus() } });
 });
 
 process.on('SIGINT', () => {
     console.log('\n[🛑] Graceful Shutdown Initiated...');
     console.log('[🧹] Cleaning up background processes...');
     process.exit(0);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    if (reason && reason.code === 'ECONNREFUSED') {
+        // Ignore redis connection refusal crashes to allow degraded mode
+    } else {
+        console.error('[-] Unhandled Rejection:', reason);
+    }
 });

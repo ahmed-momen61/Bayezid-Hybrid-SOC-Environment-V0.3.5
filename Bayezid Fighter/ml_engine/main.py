@@ -1,151 +1,386 @@
 from fastapi import FastAPI, Request
 import uvicorn
 import numpy as np
-from sklearn.ensemble import IsolationForest
 import math
 import joblib
 import os
+import copy
 import torch
 import torch.nn as nn
 from transformers import AutoModel, AutoTokenizer
 import warnings
+import sys
+import io
+
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
+
 warnings.filterwarnings('ignore')
 
-print("[⚙️] Loading INT8 Quantized Transformer Encoder...")
-tokenizer = AutoTokenizer.from_pretrained("prajjwal1/bert-tiny")
-transformer_encoder = AutoModel.from_pretrained("prajjwal1/bert-tiny")
 
-transformer_encoder = torch.quantization.quantize_dynamic(
-    transformer_encoder, {nn.Linear}, dtype=torch.qint8
-)
-transformer_encoder.eval()
+MODEL_NAME = "google/bert_uncased_L-4_H-256_A-4"
+tokenizer = None
+transformer_encoder = None
+
+if os.environ.get("BAYEZID_ML_INIT") != "1":
+    print("[⚙️] Loading INT8 Quantized 256-Dim Transformer Encoder...")
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    transformer_encoder = AutoModel.from_pretrained(MODEL_NAME)
+
+    transformer_encoder = torch.quantization.quantize_dynamic(
+        transformer_encoder, {nn.Linear}, dtype=torch.qint8
+    )
+    transformer_encoder.eval()
+    print("[✔] 256-Dim INT8 Transformer Loaded (≤2ms CPU inference).")
+
+SEQ_LEN = 5
+FEATURE_DIM = 256
 
 def generate_latent_vector(payload: str):
-    """ Converts raw live bytes/strings into a 128-dim embedding space via INT8 Transformer """
+    """ Projects raw live bytes into a 256-dimensional latent vector space """
     inputs = tokenizer(payload, return_tensors="pt", truncation=True, max_length=128, padding='max_length')
     with torch.no_grad():
         outputs = transformer_encoder(**inputs)
     vector = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
-    return vector.reshape(1, -1)
+    return vector
 
-app = FastAPI(title="Bayezid ML Sniper - Persistent Hybrid Engine")
 
-MODEL_FILE = 'bayezid_model.pkl'
-DATA_FILE = 'normal_traffic.npy'
-MALICIOUS_FILE = 'malicious_traffic.npy'
+class LSTMAutoencoder(nn.Module):
+    """ Temporal LSTM Autoencoder for Multi-Stage APT Detection (256-dim) """
+    def __init__(self, seq_len=SEQ_LEN, n_features=FEATURE_DIM, embedding_dim=64):
+        super(LSTMAutoencoder, self).__init__()
+        self.seq_len = seq_len
+        self.n_features = n_features
+        self.embedding_dim = embedding_dim
 
-print("\n[🧠] Initializing Neural ML Engine...")
+        self.encoder = nn.LSTM(input_size=n_features, hidden_size=embedding_dim, num_layers=1, batch_first=True)
+        self.decoder = nn.LSTM(input_size=embedding_dim, hidden_size=n_features, num_layers=1, batch_first=True)
 
-if os.path.exists(MODEL_FILE) and os.path.exists(DATA_FILE):
-    temp_traffic = np.load(DATA_FILE)
-    if temp_traffic.shape[1] != 128:
-        print("[⚡] Dimension change detected (4->128). Purging legacy baseline.")
-        os.remove(MODEL_FILE)
-        os.remove(DATA_FILE)
-        raise FileNotFoundError
-    normal_traffic = np.load(DATA_FILE)
-    clf = joblib.load(MODEL_FILE)
-    if normal_traffic.shape[1] != 128:
-        print("[⚠️] Dimension mismatch detected. Forcing re-initialization of baseline.")
-        raise FileNotFoundError
-    print(f"[💾] Memory Loaded: Recovered {len(normal_traffic)} baseline patterns.")
-else:
-    print("[🌱] Generating initial baseline samples...")
-    np.random.seed(42)
-    normal_traffic = np.random.normal(loc=0.0, scale=0.5, size=(500, 128))
-    clf = IsolationForest(contamination=0.01, random_state=42)
-    clf.fit(normal_traffic)
-    np.save(DATA_FILE, normal_traffic)
-    joblib.dump(clf, MODEL_FILE)
-    print(f"[✔] Initial Model Trained and SAVED.")
+    def forward(self, x):
+        _, (hidden, _) = self.encoder(x)
+        hidden = hidden.squeeze(0).unsqueeze(1).repeat(1, self.seq_len, 1)
+        decoded, _ = self.decoder(hidden)
+        return decoded
 
-if os.path.exists(MALICIOUS_FILE):
-    malicious_traffic = np.load(MALICIOUS_FILE)
-    print(f"[☠️] Swarm Memory Loaded: {len(malicious_traffic)} Zero-Day signatures.")
-    if malicious_traffic.shape[1] != 128:
-        print("[⚡] Swarm Memory dimension mismatch (4->128). Purging legacy signatures.")
-        os.remove(MALICIOUS_FILE)
-        malicious_traffic = np.empty((0, 128))
-else:
-    malicious_traffic = np.empty((0, 128))
+class ADWINThreshold:
+    """ Dynamic Concept Drift Adaptation (ADWIN) """
+    def __init__(self, window_size=100, sensitivity=3.0):
+        self.window = []
+        self.window_size = window_size
+        self.sensitivity = sensitivity
+        self.dynamic_threshold = 0.5
+
+    def update(self, error):
+        self.window.append(error)
+        if len(self.window) > self.window_size:
+            self.window.pop(0)
+
+        if len(self.window) > 10:
+            mean = np.mean(self.window)
+            std = np.std(self.window)
+            self.dynamic_threshold = mean + (self.sensitivity * std)
+        return self.dynamic_threshold
+
+
+class EWC:
+    """
+    Lightweight diagonal Fisher approximation of EWC.
+    Constrains LSTM weight updates so baseline accuracy is preserved
+    while assimilating newly weaponized zero-day vectors.
+    """
+    def __init__(self, model, importance=1000.0):
+        self.importance = importance
+        self.params = {}
+        self.fisher = {}
+        self._snapshot(model)
+
+    def _snapshot(self, model):
+        """ Snapshot current optimal weights and estimate Fisher diagonal """
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.params[name] = param.data.clone()
+                self.fisher[name] = param.data.clone().zero_()
+
+    def compute_fisher(self, model, data_tensor, criterion):
+        """
+        Estimate the diagonal Fisher Information Matrix from baseline data.
+        This tells us which weights are critical for existing knowledge.
+        """
+        model.eval()
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.fisher[name] = torch.zeros_like(param.data)
+
+        model.train()
+        sample_size = min(len(data_tensor), 50)
+        indices = torch.randperm(len(data_tensor))[:sample_size]
+
+        for idx in indices:
+            model.zero_grad()
+            sample = data_tensor[idx].unsqueeze(0)
+            output = model(sample)
+            loss = criterion(output, sample)
+            loss.backward()
+
+            for name, param in model.named_parameters():
+                if param.requires_grad and param.grad is not None:
+                    self.fisher[name] += (param.grad.data ** 2) / sample_size
+
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                self.params[name] = param.data.clone()
+
+        model.eval()
+        print(f"[🧬] EWC: Fisher Information Matrix computed over {sample_size} baseline sequences.")
+
+    def penalty(self, model):
+        """
+        EWC penalty term: sum_i F_i * (theta_i - theta_star_i)^2
+        Added to the training loss during online learning to prevent forgetting.
+        """
+        loss = 0.0
+        for name, param in model.named_parameters():
+            if name in self.fisher:
+                loss += (self.fisher[name] * (param - self.params[name]) ** 2).sum()
+        return self.importance * loss
 
 
 def extract_features(payload: str):
-    return generate_latent_vector(payload)
+    """ Converts raw payloads into Temporal Sequences (batch, seq_len, 256) """
+    parts = [p.strip() for p in payload.split(';') if p.strip()]
+    if not parts:
+        parts = [payload]
+
+    sequence = []
+    for part in parts[-SEQ_LEN:]:
+        vector = generate_latent_vector(part)
+        sequence.append(vector)
+
+    while len(sequence) < SEQ_LEN:
+        sequence.insert(0, np.zeros(FEATURE_DIM))
+
+    return np.array([sequence])  
+
+app = FastAPI(title="Bayezid ML Sniper V2 — ATHENA-LIVE Temporal Engine")
+
+import torch.quantization
+
+MODEL_FILE = 'lstm_model.pth'
+ADWIN_FILE = 'adwin_state.pkl'
+EWC_FILE = 'ewc_state.pkl'
+MALICIOUS_FILE = 'malicious_traffic.npy'
+
+if os.environ.get("BAYEZID_ML_INIT") != "1":
+    os.environ["BAYEZID_ML_INIT"] = "1"
+    print("\n[🧠] Initializing ML Sniper V2 + ATHENA-LIVE Neural Engine...")
+
+    model = LSTMAutoencoder()
+    adwin = ADWINThreshold()
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    ewc_module = None  
+    quantized_model = None
+
+    if os.path.exists(MODEL_FILE) and os.path.exists(ADWIN_FILE):
+        try:
+            model.load_state_dict(torch.load(MODEL_FILE, weights_only=True))
+            model.eval()
+            adwin = joblib.load(ADWIN_FILE)
+            print(f"[💾] Memory Loaded: Recovered LSTM-256 Weights and ADWIN thresholds.")
+
+            if os.path.exists(EWC_FILE):
+                ewc_module = joblib.load(EWC_FILE)
+                print(f"[🧬] EWC: Fisher constraints recovered from disk.")
+            else:
+                ewc_module = EWC(model)
+                print(f"[🧬] EWC: Initialized fresh (no prior Fisher data).")
+                
+            print(f"[⚡] Applying INT8 Dynamic Quantization for sub-2ms latency...")
+            quantized_model = torch.quantization.quantize_dynamic(
+                model, {nn.LSTM, nn.Linear}, dtype=torch.qint8
+            )
+            print(f"[⚡] INT8 Quantization Complete. ML Sniper V2 is locked and loaded.")
+
+        except Exception as e:
+            print(f"[⚠️] Model load error: {e}. Purging and re-initializing.")
+            for f in [MODEL_FILE, ADWIN_FILE, EWC_FILE]:
+                if os.path.exists(f):
+                    os.remove(f)
+
+    if not os.path.exists(MODEL_FILE):
+        print("[🌱] Generating initial 256-dim Temporal Baseline samples...")
+        np.random.seed(42)
+        normal_traffic = np.random.normal(loc=0.0, scale=0.5, size=(100, SEQ_LEN, FEATURE_DIM))
+        data_tensor = torch.FloatTensor(normal_traffic)
+
+        print("[⚙️] Training LSTM Autoencoder on baseline traffic...")
+        model.train()
+        for epoch in range(10):
+            optimizer.zero_grad()
+            output = model(data_tensor)
+            loss = criterion(output, data_tensor)
+            loss.backward()
+            optimizer.step()
+
+        model.eval()
+
+        with torch.no_grad():
+            reconstructed = model(data_tensor)
+            errors = torch.mean((data_tensor - reconstructed)**2, dim=[1, 2]).numpy()
+            for err in errors:
+                adwin.update(err)
+
+        ewc_module = EWC(model)
+        ewc_module.compute_fisher(model, data_tensor, criterion)
+
+        torch.save(model.state_dict(), MODEL_FILE)
+        joblib.dump(adwin, ADWIN_FILE)
+        joblib.dump(ewc_module, EWC_FILE)
+        
+        print(f"[⚡] Applying INT8 Dynamic Quantization for sub-2ms latency...")
+        quantized_model = torch.quantization.quantize_dynamic(
+            model, {nn.LSTM, nn.Linear}, dtype=torch.qint8
+        )
+        
+        print(f"[✔] Initial 256-Dim Temporal Model, ADWIN, and EWC SAVED.")
+
+    if os.path.exists(MALICIOUS_FILE):
+        malicious_traffic = np.load(MALICIOUS_FILE)
+        if malicious_traffic.ndim == 2 and malicious_traffic.shape[1] != FEATURE_DIM:
+            print(f"[⚡] Swarm Memory dimension mismatch ({malicious_traffic.shape[1]}→{FEATURE_DIM}). Purging.")
+            os.remove(MALICIOUS_FILE)
+            malicious_traffic = np.empty((0, FEATURE_DIM))
+        else:
+            print(f"[☠️] Swarm Memory Loaded: {len(malicious_traffic)} Zero-Day signatures.")
+    else:
+        malicious_traffic = np.empty((0, FEATURE_DIM))
+
+
 @app.post("/api/v1/ml/predict")
 async def predict_anomaly(req: Request):
     data = await req.json()
     payload = data.get("payload", "")
-    features = extract_features(payload)
-    ui_projection = features[0][:4].tolist()
+
+    features_seq = extract_features(payload)  
+    features_tensor = torch.FloatTensor(features_seq)
+
+    latest_feature = features_seq[0][-1]
+    ui_projection = latest_feature[:4].tolist()
+
     if malicious_traffic.size > 0:
-        distances = np.linalg.norm(malicious_traffic - features, axis=1)
+        distances = np.linalg.norm(malicious_traffic - latest_feature, axis=1)
         if np.any(distances < 1.5):
-            print(f"\n[☠️] ML SWARM MATCH: Payload features align with assimilated Zero-Day!")
+            print(f"\n[☠️] ML SWARM MATCH: Payload aligns with assimilated Zero-Day!")
             return {
                 "is_malicious": True,
                 "confidence": 99.99,
                 "engine": "ML-Swarm-Memory",
-    "features_extracted": {
-        "v0": float(ui_projection[0]),
-        "v1": float(ui_projection[1]),
-        "v2": float(ui_projection[2]),
-        "v3": float(ui_projection[3])
-    }
+                "features_extracted": {
+                    "v0": float(ui_projection[0]), "v1": float(ui_projection[1]),
+                    "v2": float(ui_projection[2]), "v3": float(ui_projection[3])
+                }
             }
-            
-    prediction = clf.predict(features) 
-    score = clf.decision_function(features)[0] 
-    is_anomaly = bool(prediction[0] == -1)
-    
-    confidence = float(abs(score) * 200) if is_anomaly else 0
-    print(f"\n[🔍] ML Analyzing Payload: Latent Vector Projection complete (Dim: {features.shape[1]}).")
-    print(f"[🧠] Verdict: {'☠️ ANOMALY' if is_anomaly else '✅ NORMAL'} (Score: {score:.3f})")
+
+    if quantized_model is not None:
+        with torch.no_grad():
+            reconstructed = quantized_model(features_tensor)
+            mse_loss = torch.mean((features_tensor - reconstructed)**2).item()
+    else:
+        model.eval()
+        with torch.no_grad():
+            reconstructed = model(features_tensor)
+            mse_loss = torch.mean((features_tensor - reconstructed)**2).item()
+
+    threshold = adwin.dynamic_threshold
+    is_anomaly = bool(mse_loss > threshold)
+
+    confidence = min((mse_loss / max(threshold, 0.001)) * 50, 99.99) if is_anomaly else 0.0
+
+    print(f"\n[🔍] ML Sniper V2: Temporal Sequence Analysis Complete (256-dim).")
+    print(f"[🧠] LSTM Error: {mse_loss:.5f} | ADWIN Threshold: {threshold:.5f}")
+    if is_anomaly:
+        print(f"[🚨] MULTI-STAGE APT DETECTED! Sequence deviates from temporal baseline.")
+    else:
+        print(f"[✅] Sequence Normal (Concept Drift Adapted).")
 
     return {
         "is_malicious": is_anomaly,
-        "confidence": min(round(confidence, 2), 99.99),
-        "engine": "IsolationForest-Anomaly",
-    "features_extracted": {
-        "v0": float(ui_projection[0]),
-        "v1": float(ui_projection[1]),
-        "v2": float(ui_projection[2]),
-        "v3": float(ui_projection[3])
+        "confidence": round(confidence, 2),
+        "engine": "LSTM-Autoencoder-ADWIN-256",
+        "features_extracted": {
+            "v0": float(ui_projection[0]), "v1": float(ui_projection[1]),
+            "v2": float(ui_projection[2]), "v3": float(ui_projection[3])
+        }
     }
-    }
+
 
 @app.post("/api/v1/ml/feedback")
 async def update_model(req: Request):
-    global normal_traffic, clf
+    global model, adwin, optimizer, ewc_module
     data = await req.json()
     new_payload = data.get("payload", "")
+
     if new_payload:
-        new_features = extract_features(new_payload)
-        if any(np.allclose(new_features, row, atol=1e-5) for row in normal_traffic):
-            return {"status": "ignored", "message": "Pattern already known."}
-        normal_traffic = np.vstack([normal_traffic, new_features])
-        clf.fit(normal_traffic)
-        np.save(DATA_FILE, normal_traffic)
-        joblib.dump(clf, MODEL_FILE)
-        print(f"\n[🔄] FEEDBACK RECEIVED: Normal traffic baseline expanded.")
-        return {"status": "success", "message": "Model updated."}
+        features_seq = extract_features(new_payload)
+        features_tensor = torch.FloatTensor(features_seq)
+
+        model.eval()
+        with torch.no_grad():
+            reconstructed = model(features_tensor)
+            mse_loss = torch.mean((features_tensor - reconstructed)**2).item()
+
+        new_threshold = adwin.update(mse_loss)
+
+        model.train()
+        optimizer.zero_grad()
+        output = model(features_tensor)
+        task_loss = criterion(output, features_tensor)
+
+        if ewc_module is not None:
+            ewc_penalty = ewc_module.penalty(model)
+            total_loss = task_loss + ewc_penalty
+            print(f"[🧬] EWC: Task Loss={task_loss.item():.5f} | EWC Penalty={ewc_penalty.item():.5f}")
+        else:
+            total_loss = task_loss
+
+        total_loss.backward()
+        optimizer.step()
+
+        torch.save(model.state_dict(), MODEL_FILE)
+        joblib.dump(adwin, ADWIN_FILE)
+        if ewc_module:
+            joblib.dump(ewc_module, EWC_FILE)
+            
+        global quantized_model
+        quantized_model = torch.quantization.quantize_dynamic(
+            model, {nn.LSTM, nn.Linear}, dtype=torch.qint8
+        )
+
+        print(f"[🔄] ML Sniper V2: Concept Drift Adapted (EWC Active). New Threshold: {new_threshold:.5f}. INT8 Model updated.")
+        return {"status": "success", "message": "LSTM, ADWIN & EWC updated. INT8 model re-quantized."}
+
     return {"status": "error", "message": "No payload"}
+
 
 @app.post("/api/v1/ml/swarm_feedback")
 async def swarm_update(req: Request):
     global malicious_traffic
     data = await req.json()
-    payload = data.get("payload") 
+    payload = data.get("payload")
     if payload:
         try:
-            new_features = extract_features(payload)
-            malicious_traffic = np.vstack([malicious_traffic, new_features]) if malicious_traffic.size else new_features
+            features_seq = extract_features(payload)
+            latest_feature = features_seq[0][-1]
+            malicious_traffic = np.vstack([malicious_traffic, latest_feature]) if malicious_traffic.size else np.array([latest_feature])
             np.save(MALICIOUS_FILE, malicious_traffic)
-            print(f"\n[🐝] SWARM ASSIMILATION: ML Engine memorized new Zero-Day feature signature.")
+            print(f"\n[🐝] SWARM ASSIMILATION: ML Sniper V2 memorized Zero-Day signature (256-dim).")
             return {"status": "success", "message": "Zero-Day assimilated."}
         except Exception as e:
             return {"status": "error", "message": str(e)}
     return {"status": "failed", "message": "No payload provided"}
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")

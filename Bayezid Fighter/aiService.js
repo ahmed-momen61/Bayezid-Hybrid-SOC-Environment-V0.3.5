@@ -562,7 +562,7 @@ const runBreacherAgent = async(targetInfo, scanResults, customInstructions = "")
     } catch (error) { console.error('[-] Breacher Error:', error.message); return null; }
 };
 
-const runPhantomAgent = async(targetInfo, shellContext, customInstructions = "") => {
+const runPhantomAgent = async(targetInfo, shellContext, customInstructions = "", applyAdversarialML = true) => {
     console.log(`\n[👻] Waking up Phantom (PrivEsc & OS Ghost) for Target: ${targetInfo}...`);
     try {
         const sharedMemory = await getSharedMemory(targetInfo);
@@ -588,10 +588,18 @@ const runPhantomAgent = async(targetInfo, shellContext, customInstructions = "")
         const aiDecision = await askRedSwarmAI(phantomPrompt, true);
         let executionOutput = "";
         let finalCommand = aiDecision.best_command;
+
+        if (applyAdversarialML) {
+            const { runPhantomMLEvasion } = require('./phantomML');
+            console.log(`[👻] Applying PHANTOM-ML Adversarial Layers to payload...`);
+            const evasionResult = await runPhantomMLEvasion(finalCommand, 'http://127.0.0.1:8000/api/v1/ml/predict', ['perturbation', 'zerowidth']);
+            finalCommand = evasionResult.evadedPayload;
+        }
+
         let success = false;
         const timeoutMs = aiDecision.estimated_timeout_ms || 30000;
         const isBackground = aiDecision.run_in_background || false;
-        const commandsToTry = [aiDecision.best_command, ...(aiDecision.alternatives || []).map(a => a.command)];
+        const commandsToTry = [finalCommand, ...(aiDecision.alternatives || []).map(a => a.command)];
 
         for (let cmd of commandsToTry) {
             if (!cmd) continue;
