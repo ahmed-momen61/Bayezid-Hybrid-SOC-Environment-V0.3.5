@@ -5,6 +5,28 @@ from sklearn.ensemble import IsolationForest
 import math
 import joblib
 import os
+import torch
+import torch.nn as nn
+from transformers import AutoModel, AutoTokenizer
+import warnings
+warnings.filterwarnings('ignore')
+
+print("[⚙️] Loading INT8 Quantized Transformer Encoder...")
+tokenizer = AutoTokenizer.from_pretrained("prajjwal1/bert-tiny")
+transformer_encoder = AutoModel.from_pretrained("prajjwal1/bert-tiny")
+
+transformer_encoder = torch.quantization.quantize_dynamic(
+    transformer_encoder, {nn.Linear}, dtype=torch.qint8
+)
+transformer_encoder.eval()
+
+def generate_latent_vector(payload: str):
+    """ Converts raw live bytes/strings into a 128-dim embedding space via INT8 Transformer """
+    inputs = tokenizer(payload, return_tensors="pt", truncation=True, max_length=128, padding='max_length')
+    with torch.no_grad():
+        outputs = transformer_encoder(**inputs)
+    vector = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
+    return vector.reshape(1, -1)
 
 app = FastAPI(title="Bayezid ML Sniper - Persistent Hybrid Engine")
 
@@ -15,17 +37,22 @@ MALICIOUS_FILE = 'malicious_traffic.npy'
 print("\n[🧠] Initializing Neural ML Engine...")
 
 if os.path.exists(MODEL_FILE) and os.path.exists(DATA_FILE):
+    temp_traffic = np.load(DATA_FILE)
+    if temp_traffic.shape[1] != 128:
+        print("[⚡] Dimension change detected (4->128). Purging legacy baseline.")
+        os.remove(MODEL_FILE)
+        os.remove(DATA_FILE)
+        raise FileNotFoundError
     normal_traffic = np.load(DATA_FILE)
     clf = joblib.load(MODEL_FILE)
+    if normal_traffic.shape[1] != 128:
+        print("[⚠️] Dimension mismatch detected. Forcing re-initialization of baseline.")
+        raise FileNotFoundError
     print(f"[💾] Memory Loaded: Recovered {len(normal_traffic)} baseline patterns.")
 else:
     print("[🌱] Generating initial baseline samples...")
     np.random.seed(42)
-    lengths = np.random.randint(10, 150, 500)      
-    symbols = np.random.randint(0, 3, 500)         
-    entropies = np.random.uniform(1.0, 3.0, 500)  
-    keywords = np.zeros(500) 
-    normal_traffic = np.column_stack((lengths, symbols, entropies, keywords))
+    normal_traffic = np.random.normal(loc=0.0, scale=0.5, size=(500, 128))
     clf = IsolationForest(contamination=0.01, random_state=42)
     clf.fit(normal_traffic)
     np.save(DATA_FILE, normal_traffic)
@@ -35,25 +62,22 @@ else:
 if os.path.exists(MALICIOUS_FILE):
     malicious_traffic = np.load(MALICIOUS_FILE)
     print(f"[☠️] Swarm Memory Loaded: {len(malicious_traffic)} Zero-Day signatures.")
+    if malicious_traffic.shape[1] != 128:
+        print("[⚡] Swarm Memory dimension mismatch (4->128). Purging legacy signatures.")
+        os.remove(MALICIOUS_FILE)
+        malicious_traffic = np.empty((0, 128))
 else:
-    malicious_traffic = np.empty((0, 4))
+    malicious_traffic = np.empty((0, 128))
+
 
 def extract_features(payload: str):
-    p_lower = payload.lower()
-    length = len(payload)
-    special_chars = sum(not c.isalnum() and not c.isspace() for c in payload)
-    dangerous_keywords = ['union', 'select', 'insert', 'drop', 'script', 'admin', 'sleep', 'waitfor', 'delay', 'bash', 'wget', 'curl', 'nc', 'sh']
-    keyword_count = sum(1 for word in dangerous_keywords if word in p_lower) * 20
-    prob = [float(payload.count(c)) / length for c in dict.fromkeys(list(payload))]
-    entropy = -sum([p * math.log(p) / math.log(2.0) for p in prob]) if length > 0 else 0
-    return np.array([[length, special_chars, entropy, keyword_count]])
-
+    return generate_latent_vector(payload)
 @app.post("/api/v1/ml/predict")
 async def predict_anomaly(req: Request):
     data = await req.json()
     payload = data.get("payload", "")
     features = extract_features(payload)
-    
+    ui_projection = features[0][:4].tolist()
     if malicious_traffic.size > 0:
         distances = np.linalg.norm(malicious_traffic - features, axis=1)
         if np.any(distances < 1.5):
@@ -62,32 +86,32 @@ async def predict_anomaly(req: Request):
                 "is_malicious": True,
                 "confidence": 99.99,
                 "engine": "ML-Swarm-Memory",
-                "features_extracted": {
-                    "length": int(features[0][0]),
-                    "special_chars": int(features[0][1]),
-                    "entropy": round(features[0][2], 2),
-                    "keyword_count": int(features[0][3])
-                }
+    "features_extracted": {
+        "v0": float(ui_projection[0]),
+        "v1": float(ui_projection[1]),
+        "v2": float(ui_projection[2]),
+        "v3": float(ui_projection[3])
+    }
             }
             
     prediction = clf.predict(features) 
     score = clf.decision_function(features)[0] 
     is_anomaly = bool(prediction[0] == -1)
-    confidence = float(abs(score) * 200) if is_anomaly else 0
     
-    print(f"\n[🔍] ML Analyzing Payload: Length={features[0][0]}, Symbols={features[0][1]}, Entropy={features[0][2]:.2f}, Keywords={int(features[0][3] / 20)}")
+    confidence = float(abs(score) * 200) if is_anomaly else 0
+    print(f"\n[🔍] ML Analyzing Payload: Latent Vector Projection complete (Dim: {features.shape[1]}).")
     print(f"[🧠] Verdict: {'☠️ ANOMALY' if is_anomaly else '✅ NORMAL'} (Score: {score:.3f})")
 
     return {
         "is_malicious": is_anomaly,
         "confidence": min(round(confidence, 2), 99.99),
         "engine": "IsolationForest-Anomaly",
-        "features_extracted": {
-            "length": int(features[0][0]),
-            "special_chars": int(features[0][1]),
-            "entropy": round(features[0][2], 2),
-            "keyword_count": int(features[0][3])
-        }
+    "features_extracted": {
+        "v0": float(ui_projection[0]),
+        "v1": float(ui_projection[1]),
+        "v2": float(ui_projection[2]),
+        "v3": float(ui_projection[3])
+    }
     }
 
 @app.post("/api/v1/ml/feedback")
