@@ -171,27 +171,79 @@ class FederationAggregator {
         console.log(`[🌐] Participating Nodes: ${this.pendingUpdates.size}`);
         console.log(`[🌐] =============================================\n`);
 
-        let totalData = 0;
-        for (const [, update] of this.pendingUpdates) {
-            totalData += update.dataSize;
+        const DATA_SIZE_CAP = 10000;
+        for (const [nodeId, update] of this.pendingUpdates) {
+            if (update.dataSize > DATA_SIZE_CAP) {
+                console.log(`[🛡️] BFT: Capping dataSize for node ${nodeId}: ${update.dataSize} -> ${DATA_SIZE_CAP}`);
+                update.dataSize = DATA_SIZE_CAP;
+            }
+        }
+
+        const norms = [];
+        const nodeIds = [];
+        for (const [nodeId, update] of this.pendingUpdates) {
+            norms.push(this._norm(update.gradients));
+            nodeIds.push(nodeId);
+        }
+        const sortedNorms = [...norms].sort((a, b) => a - b);
+        const medianNorm = sortedNorms[Math.floor(sortedNorms.length / 2)];
+        const normThreshold = medianNorm * 3;
+
+        const validUpdates = new Map();
+        for (let idx = 0; idx < nodeIds.length; idx++) {
+            if (norms[idx] > normThreshold && normThreshold > 0) {
+                console.log(`[🛡️] BFT OUTLIER REJECTED: Node ${nodeIds[idx]} norm=${norms[idx].toFixed(6)} exceeds 3x median (${medianNorm.toFixed(6)})`);
+            } else {
+                validUpdates.set(nodeIds[idx], this.pendingUpdates.get(nodeIds[idx]));
+            }
+        }
+
+        if (validUpdates.size === 0) {
+            console.log(`[⚠️] All updates rejected as outliers. Skipping round.`);
+            this.pendingUpdates.clear();
+            return null;
         }
 
         const aggregated = new Float32Array(this.modelDim);
-        for (const [nodeId, update] of this.pendingUpdates) {
-            const weight = update.dataSize / totalData;
-            for (let i = 0; i < this.modelDim; i++) {
-                aggregated[i] += update.gradients[i] * weight;
+
+        if (validUpdates.size >= 3) {
+            console.log(`[🛡️] BFT: Using coordinate-wise median aggregation (${validUpdates.size} nodes).`);
+            const allGradients = [];
+            for (const [, update] of validUpdates) {
+                allGradients.push(update.gradients);
             }
-            console.log(`[🌐] Node ${nodeId}: weight=${weight.toFixed(3)} (${update.dataSize} samples)`);
+            for (let i = 0; i < this.modelDim; i++) {
+                const vals = allGradients.map(g => g[i]).sort((a, b) => a - b);
+                const mid = Math.floor(vals.length / 2);
+                aggregated[i] = (vals.length % 2 === 0) ? (vals[mid - 1] + vals[mid]) / 2 : vals[mid];
+            }
+        } else {
+            console.log(`[🌐] FedAvg fallback (< 3 valid nodes).`);
+            let totalData = 0;
+            for (const [, update] of validUpdates) {
+                totalData += update.dataSize;
+            }
+            for (const [nodeId, update] of validUpdates) {
+                const weight = update.dataSize / totalData;
+                for (let i = 0; i < this.modelDim; i++) {
+                    aggregated[i] += update.gradients[i] * weight;
+                }
+                console.log(`[🌐] Node ${nodeId}: weight=${weight.toFixed(3)} (${update.dataSize} samples)`);
+            }
         }
 
         for (let i = 0; i < this.modelDim; i++) {
             this.globalWeights[i] += aggregated[i];
         }
 
+        let totalData = 0;
+        for (const [, update] of validUpdates) {
+            totalData += update.dataSize;
+        }
+
         const roundResult = {
             round: this.roundNumber,
-            nodes: this.pendingUpdates.size,
+            nodes: validUpdates.size,
             totalData,
             aggregatedNorm: this._norm(aggregated),
             globalWeightsNorm: this._norm(this.globalWeights),

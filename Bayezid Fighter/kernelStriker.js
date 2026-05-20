@@ -6,6 +6,14 @@ const path = require('path');
 const fs = require('fs');
 const execPromise = util.promisify(exec);
 
+const validateIP = (ip) => {
+    if (typeof ip !== 'string') return false;
+    if (/[;|&$`><()]/.test(ip)) return false;
+    if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(ip)) return false;
+    const octets = ip.split('.');
+    return octets.every(o => { const n = parseInt(o, 10); return n >= 0 && n <= 255; });
+};
+
 const ttlRegistry = new Map();
 const BLOCK_DURATION_MS = 24 * 60 * 60 * 1000;
 
@@ -73,6 +81,10 @@ const initEBPF = async() => {
 
 
 const traceAttackerAsync = async(ip) => {
+    if (!validateIP(ip)) {
+        console.error(`[🛑] REJECTED: Invalid IP "${ip}" in traceAttackerAsync.`);
+        return null;
+    }
     console.log(`[🔍] COUNTER-RECON: Initiating Reverse OSINT on ${ip} (Running in background)...`);
 
     const geoPromise = axios.get(`http://ip-api.com/json/${ip}?fields=status,country,city,isp,as,proxy`)
@@ -100,6 +112,10 @@ const traceAttackerAsync = async(ip) => {
 const KernelStriker = {
 
     blockIp: async(ip) => {
+        if (!validateIP(ip)) {
+            console.error(`[🛑] REJECTED: Invalid IP "${ip}" in blockIp.`);
+            return { blocked: false, reason: 'invalid_ip' };
+        }
         let cmd = '';
         console.log(`\n[⚡] STRIKE ORDER: Preparing to execute ${ip} at Kernel Level...`);
 
@@ -133,6 +149,10 @@ const KernelStriker = {
     },
 
     unblockIp: (ip) => {
+        if (!validateIP(ip)) {
+            console.error(`[🛑] REJECTED: Invalid IP "${ip}" in unblockIp.`);
+            return;
+        }
         let cmd = '';
 
         if (platform === 'linux') {

@@ -51,13 +51,54 @@ const sanitizePayloadForAI = (rawPayload) => {
     return safePayload;
 };
 
+const sanitizeCommand = (command) => {
+    if (process.env.ALLOW_UNSANITIZED_EXEC === 'true') return command;
+
+    const ALLOWED_PREFIXES = [
+        'nmap', 'nikto', 'sqlmap', 'hydra', 'gobuster', 'ffuf', 'curl', 'wget',
+        'nuclei', 'wfuzz', 'dirb', 'whatweb', 'sslscan', 'testssl',
+        'python3', 'py', 'pip', 'node', 'cat', 'echo', 'grep', 'find',
+        'ls', 'dir', 'type', 'whoami', 'id', 'hostname', 'netstat', 'ss',
+        'ip', 'ifconfig', 'ping', 'traceroute', 'dig', 'nslookup', 'ollama'
+    ];
+
+    const BLOCKED_PATTERNS = [
+        /;\s*rm\s/i,
+        /;\s*dd\s/i,
+        /\|\s*bash/i,
+        /\|\s*sh\b/i,
+        /\$\(/,
+        /`/
+    ];
+
+    const baseCommand = command.trim().split(/\s+/)[0].replace(/^.*[\\/]/, '');
+
+    const isAllowed = ALLOWED_PREFIXES.some(prefix =>
+        baseCommand.toLowerCase() === prefix.toLowerCase()
+    );
+
+    const isBlocked = BLOCKED_PATTERNS.some(pattern => pattern.test(command));
+
+    if (!isAllowed || isBlocked) {
+        console.log(`\n[🛡️ COMMAND BLOCKED] Denied execution of: ${command}`);
+        return null;
+    }
+
+    return command;
+};
+
 const smartExec = async(command, timeoutMs, isBackground) => {
+    const sanitized = sanitizeCommand(command);
+    if (sanitized === null) {
+        return { stdout: "", stderr: "[🛡️ COMMAND BLOCKED] Command failed security validation." };
+    }
+
     if (isBackground) {
         const logFile = path.join(__dirname, `job_${Date.now()}.log`);
         const out = fs.openSync(logFile, 'a');
         const err = fs.openSync(logFile, 'a');
 
-        const child = spawn(command, {
+        const child = spawn(sanitized, {
             shell: true,
             detached: true,
             stdio: ['ignore', out, err]
@@ -71,7 +112,7 @@ const smartExec = async(command, timeoutMs, isBackground) => {
     }
 
     try {
-        const { stdout, stderr } = await execPromise(command, { timeout: timeoutMs, maxBuffer: 1024 * 1024 * 10 });
+        const { stdout, stderr } = await execPromise(sanitized, { timeout: timeoutMs, maxBuffer: 1024 * 1024 * 10 });
         return { stdout, stderr };
     } catch (err) {
         if (err.killed && err.signal === 'SIGTERM') {

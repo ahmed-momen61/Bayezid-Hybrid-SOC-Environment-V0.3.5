@@ -36,7 +36,15 @@ const ThreatGrapher = require('./threatGrapher');
 const OracleReverser = require('./oracleAgent');
 const SwarmCrypto = require('./swarmCrypto');
 
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toString('hex');
+const ENCRYPTION_KEY = (() => {
+    if (process.env.ENCRYPTION_KEY) return process.env.ENCRYPTION_KEY;
+    const keyPath = path.join(__dirname, 'bayezid_master.key');
+    if (fs.existsSync(keyPath)) return fs.readFileSync(keyPath, 'utf-8').trim();
+    const newKey = crypto.randomBytes(32).toString('hex');
+    fs.writeFileSync(keyPath, newKey, { mode: 0o600 });
+    console.log('[⚠️] ENCRYPTION_KEY not set. Generated and persisted to bayezid_master.key');
+    return newKey;
+})();
 const IV_LENGTH = 16;
 const { startMatrixShell } = require('./matrixShell');
 const { startSigmaSymbioticLoop } = require('./sigmaEngine');
@@ -73,6 +81,10 @@ dotenv.config();
 const prisma = new PrismaClient();
 const app = express();
 app.use(cors());
+
+const { authMiddleware } = require('./authMiddleware');
+app.use(authMiddleware);
+
 app.use(express.json());
 app.use(express.text());
 const http = require('http');
@@ -85,8 +97,7 @@ const io = new Server(httpServer, {
     }
 });
 global.io = io;
-app.use(express.json());
-app.use(express.text());
+
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -358,12 +369,6 @@ const handleSecurityAlert = async(req, res) => {
     }
 };
 
-app.post('/api/v1/alerts/ingest', handleSecurityAlert);
-
-app.post('/api/v1/bridge/report-vuln', (req, res) => {
-    console.log(`\n[🌉] FUSION PROTOCOL: Vulnerability Report Proxy Triggered.`);
-    handleSecurityAlert(req, res);
-});
 app.post('/api/v1/alerts/ingest', handleSecurityAlert);
 
 
@@ -797,38 +802,6 @@ app.post('/api/v1/bridge/approve-fix', async(req, res) => {
     }
 });
 
-app.post('/api/v1/bridge/isolate', async(req, res) => {
-    const { vulnId, attackerIp } = req.body;
-
-    try {
-        const vuln = await prisma.vulnerabilityBridge.findUnique({ where: { id: vulnId } });
-        if (!vuln) return res.status(404).json({ error: "Vulnerability not found" });
-
-        console.log(`\n[🛡️] Blue Side: Initiating Cognitive Isolation for ID: ${vulnId}`);
-
-        const aiService = require('./aiService');
-        const targetIpToIsolate = attackerIp || "185.20.30.40";
-
-        const isolationResult = await aiService.runShadowRouterAgent(targetIpToIsolate, vuln.vulnName);
-
-        if (isolationResult) {
-            await prisma.vulnerabilityBridge.update({
-                where: { id: vulnId },
-                data: { status: "ISOLATED" }
-            });
-
-            res.json({
-                status: "success",
-                message: "Attacker successfully rerouted to Honeypot.",
-                strategy: isolationResult
-            });
-        } else {
-            res.status(500).json({ error: "Failed to generate isolation strategy." });
-        }
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
 
 const startEscalationWatcher = () => {
     const watch = async() => {
@@ -1138,6 +1111,8 @@ app.post('/api/v1/bridge/isolate', async(req, res) => {
                 message: `Attacker (${finalIpToIsolate}) successfully rerouted to Honeypot.`,
                 strategy: isolationResult
             });
+        } else {
+            res.status(500).json({ error: "Failed to generate isolation strategy." });
         }
     } catch (error) {
         res.status(500).json({ error: error.message });

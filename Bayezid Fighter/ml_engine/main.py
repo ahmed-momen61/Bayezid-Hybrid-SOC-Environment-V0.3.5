@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request
 import uvicorn
+import threading
 import numpy as np
 import math
 import joblib
@@ -18,6 +19,8 @@ if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8')
 
 warnings.filterwarnings('ignore')
+
+model_lock = threading.Lock()
 
 
 MODEL_NAME = "google/bert_uncased_L-4_H-256_A-4"
@@ -348,10 +351,11 @@ async def update_model(req: Request):
         total_loss.backward()
         optimizer.step()
 
-        torch.save(model.state_dict(), MODEL_FILE)
-        joblib.dump(adwin, ADWIN_FILE)
-        if ewc_module:
-            joblib.dump(ewc_module, EWC_FILE)
+        with model_lock:
+            torch.save(model.state_dict(), MODEL_FILE)
+            joblib.dump(adwin, ADWIN_FILE)
+            if ewc_module:
+                joblib.dump(ewc_module, EWC_FILE)
             
         global quantized_model
         quantized_model = torch.quantization.quantize_dynamic(
@@ -374,7 +378,10 @@ async def swarm_update(req: Request):
             features_seq = extract_features(payload)
             latest_feature = features_seq[0][-1]
             malicious_traffic = np.vstack([malicious_traffic, latest_feature]) if malicious_traffic.size else np.array([latest_feature])
-            np.save(MALICIOUS_FILE, malicious_traffic)
+            if len(malicious_traffic) > 10000:
+                malicious_traffic = malicious_traffic[-10000:]
+            with model_lock:
+                np.save(MALICIOUS_FILE, malicious_traffic)
             print(f"\n[🐝] SWARM ASSIMILATION: ML Sniper V2 memorized Zero-Day signature (256-dim).")
             return {"status": "success", "message": "Zero-Day assimilated."}
         except Exception as e:

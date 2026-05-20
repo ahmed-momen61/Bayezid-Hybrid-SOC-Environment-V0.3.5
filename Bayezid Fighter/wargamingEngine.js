@@ -1,4 +1,5 @@
 const { askRedSwarmAI, chatWithLocalModelFast } = require('./aiService');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const SwarmCrypto = require('./swarmCrypto');
@@ -68,14 +69,39 @@ const WargamingEngine = {
 
     saveImmunity: (rules) => {
         const vaultPath = path.join(__dirname, 'immunity_vault.json');
+        const vaultKey = process.env.ENCRYPTION_KEY || 'bayezid-vault-key';
         let currentVault = [];
+
         if (fs.existsSync(vaultPath)) {
-            currentVault = JSON.parse(fs.readFileSync(vaultPath));
+            try {
+                const raw = JSON.parse(fs.readFileSync(vaultPath, 'utf8'));
+                if (raw && raw.hmac && raw.data) {
+                    const check = crypto.createHmac('sha256', vaultKey)
+                        .update(JSON.stringify(raw.data))
+                        .digest('hex');
+                    if (check !== raw.hmac) {
+                        console.error(`[🚨] TAMPER ALERT: Immunity vault HMAC mismatch! Rejecting file.`);
+                        currentVault = [];
+                    } else {
+                        currentVault = raw.data;
+                    }
+                } else {
+                    currentVault = Array.isArray(raw) ? raw : [];
+                }
+            } catch (e) {
+                console.error(`[⚠️] Vault file corrupted or unreadable. Starting fresh.`, e.message);
+                currentVault = [];
+            }
         }
 
         const updatedVault = [...currentVault, ...rules];
-        fs.writeFileSync(vaultPath, JSON.stringify(updatedVault, null, 2));
-        console.log(`[🛡️] IMMUNITY: ${rules.length} new rules added to the Vault.`);
+        const jsonData = JSON.stringify(updatedVault, null, 2);
+        const hmac = crypto.createHmac('sha256', vaultKey)
+            .update(jsonData)
+            .digest('hex');
+        const wrapper = { data: updatedVault, hmac, version: Date.now() };
+        fs.writeFileSync(vaultPath, JSON.stringify(wrapper, null, 2));
+        console.log(`[🛡️] IMMUNITY: ${rules.length} new rules added to the Vault (HMAC-protected).`);
 
         rules.forEach(rule => WargamingEngine.broadcastSwarmRule(rule));
     },

@@ -207,6 +207,11 @@ class MnemonProbeManager {
 
 
     async compileAndLoad(probeName) {
+        if (!MONITORED_SYSCALLS[probeName]) {
+            console.log(`[!] MNEMON: Invalid probe name rejected: ${probeName}`);
+            return { success: false, error: 'Invalid probe name' };
+        }
+
         if (process.platform === 'win32') {
             console.log(`\n[🧠] MNEMON (Windows Fallback): eBPF is not natively supported. Switching to Event Tracing for Windows (ETW)...`);
             console.log(`[🧠] Monitoring API calls equivalent to ${probeName} via ETW (Simulated for SOAR).`);
@@ -223,7 +228,7 @@ class MnemonProbeManager {
         }
 
         return new Promise((resolve) => {
-            const compileCmd = `clang -O2 -target bpf -c ${sourceFile} -o ${objectFile} -I/usr/include -I/usr/include/bpf`;
+            const compileCmd = `clang -O2 -target bpf -c "${sourceFile}" -o "${objectFile}" -I/usr/include -I/usr/include/bpf`;
             console.log(`[🧠] Compiling: ${compileCmd}`);
 
             const proc = spawn('sh', ['-c', compileCmd], { timeout: 30000 });
@@ -240,7 +245,7 @@ class MnemonProbeManager {
 
                 console.log(`[✔] Compiled: ${objectFile}`);
 
-                const loadCmd = `bpftool prog load ${objectFile} /sys/fs/bpf/mnemon_${probeName}`;
+                const loadCmd = `bpftool prog load "${objectFile}" /sys/fs/bpf/mnemon_${probeName}`;
                 const loadProc = spawn('sh', ['-c', loadCmd], { timeout: 10000 });
                 let loadErr = '';
 
