@@ -7,11 +7,23 @@ const fs = require('fs');
 const execPromise = util.promisify(exec);
 
 const validateIP = (ip) => {
-    if (typeof ip !== 'string') return false;
-    if (/[;|&$`><()]/.test(ip)) return false;
-    if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(ip)) return false;
-    const octets = ip.split('.');
-    return octets.every(o => { const n = parseInt(o, 10); return n >= 0 && n <= 255; });
+    try {
+        if (typeof ip !== 'string') return false;
+        if (/[;|&$`><()]/.test(ip)) throw new Error(`INVALID_IP_REJECTED: ${ip}`);
+        const ipv4 = /^(25[0-5]|2[0-4]\d|[01]?\d\d?)(\.(25[0-5]|2[0-4]\d|[01]?\d\d?)){3}$/;
+        if (!ipv4.test(ip)) throw new Error(`INVALID_IP_REJECTED: ${ip}`);
+        // Block RFC-1918 and loopback to prevent self-lockout
+        const parts = ip.split('.').map(Number);
+        if (parts[0] === 10 || parts[0] === 127 ||
+            (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+            (parts[0] === 192 && parts[1] === 168)) {
+            throw new Error(`SELF_LOCKOUT_PREVENTED: RFC-1918/loopback IP ${ip}`);
+        }
+        return true;
+    } catch (e) {
+        console.error(`[🛑] IP Validation Failed: ${e.message}`);
+        return false;
+    }
 };
 
 const ttlRegistry = new Map();

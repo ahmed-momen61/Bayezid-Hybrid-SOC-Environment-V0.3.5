@@ -106,4 +106,110 @@ const saveIncidentToMemory = async(alertId, logData) => {
     }
 };
 
-module.exports = { findSimilarIncidents, saveIncidentToMemory, publishLiveEvent, redisClient };
+
+const agentCampaignIndexes = new Map();
+const agentMemoryRegistries = new Map();
+const agentMemoryCounters = new Map();
+const AGENT_EMBED_DIM = dimension;
+
+const _getCampaignIndex = (targetId) => {
+    if (!agentCampaignIndexes.has(targetId)) {
+        agentCampaignIndexes.set(targetId, new IndexFlatL2(AGENT_EMBED_DIM));
+        agentMemoryRegistries.set(targetId, new Map());
+        agentMemoryCounters.set(targetId, 0);
+    }
+    return {
+        index: agentCampaignIndexes.get(targetId),
+        registry: agentMemoryRegistries.get(targetId),
+        counter: agentMemoryCounters.get(targetId)
+    };
+};
+
+const publishAgentEvent = async(targetId, agentName, eventData) => {
+    try {
+        if (!redisClient.isOpen) return;
+        const streamKey = `redswarm:${targetId}:events`;
+        await redisClient.xAdd(streamKey, '*', {
+            agent: agentName,
+            action: eventData.action || '',
+            command: eventData.command || '',
+            result: (eventData.result || '').substring(0, 2000),
+            success: String(eventData.success || false),
+            ts: String(Date.now())
+        });
+    } catch (e) {
+        if (e.code !== 'ECONNREFUSED') {
+            console.error('[-] Redis Stream XADD Error:', e.message);
+        }
+    }
+};
+
+const getRecentAgentEvents = async(targetId, count = 20) => {
+    try {
+        if (!redisClient.isOpen) return [];
+        const streamKey = `redswarm:${targetId}:events`;
+        const results = await redisClient.xRevRange(streamKey, '+', '-', { COUNT: count });
+        if (!results || results.length === 0) return [];
+        return results.map(entry => {
+            const m = entry.message;
+            return `[${m.agent}${m.success === 'true' ? ' ✅' : ' ❌'}]: ${m.action} → ${m.command}${m.result ? ' | Output: ' + m.result.substring(0, 300) : ''}`;
+        });
+    } catch (e) {
+        if (e.code !== 'ECONNREFUSED') {
+            console.error('[-] Redis Stream XREVRANGE Error:', e.message);
+        }
+        return [];
+    }
+};
+
+const saveAgentMemoryVector = async(targetId, logText) => {
+    const vector = await generateEmbedding(logText);
+    if (!vector) return;
+    try {
+        const campaign = _getCampaignIndex(targetId);
+        campaign.index.add(vector);
+        campaign.registry.set(campaign.counter, { text: logText, ts: Date.now() });
+        agentMemoryCounters.set(targetId, campaign.counter + 1);
+    } catch (e) {
+        console.error('[-] Agent FAISS Store Error:', e.message);
+    }
+};
+
+const semanticAgentSearch = async(targetId, queryText, topK = 5) => {
+    try {
+        const campaign = _getCampaignIndex(targetId);
+        if (campaign.index.ntotal() === 0) return [];
+
+        const vector = await generateEmbedding(queryText);
+        if (!vector) return [];
+
+        const k = Math.min(topK, campaign.index.ntotal());
+        const results = campaign.index.search(vector, k);
+        const matched = [];
+
+        if (results && results.distances) {
+            for (let i = 0; i < results.distances.length; i++) {
+                const similarity = Math.max(0, 1 - (results.distances[i] / 100));
+                if (similarity >= 0.85) {
+                    const entry = campaign.registry.get(results.labels[i]);
+                    if (entry) matched.push(entry.text);
+                }
+            }
+        }
+        return matched;
+    } catch (e) {
+        console.error('[-] Agent Semantic Search Error:', e.message);
+        return [];
+    }
+};
+
+module.exports = {
+    findSimilarIncidents,
+    saveIncidentToMemory,
+    publishLiveEvent,
+    redisClient,
+    publishAgentEvent,
+    getRecentAgentEvents,
+    saveAgentMemoryVector,
+    semanticAgentSearch
+};

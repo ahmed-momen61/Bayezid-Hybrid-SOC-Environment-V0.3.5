@@ -101,6 +101,8 @@ model VulnerabilityBridge {
 model User {
   id             String   @id @default(uuid())
   username       String   @unique
+  passwordHash   String   @default("") // Added for Phase 1 PBKDF2 authentication
+  publicKey      String?  @db.Text // Added for Phase 2 RSA-256 Operator Approval
   role           String   @default("JUNIOR_ANALYST") // JUNIOR_ANALYST, SENIOR_ANALYST, ADMIN
   trustScore     Int      @default(50)               // من 0 لـ 100، بيزيد ويقل حسب قراراته
   createdAt      DateTime @default(now())
@@ -135,4 +137,34 @@ model AuditLog {
   aiVetoTriggered Boolean @default(false)
   aiReasoning    String?
   timestamp      DateTime @default(now())
+}
+
+model RoeToken {
+  id              String    @id @default(uuid())
+  issuedToUserId  String
+  targetScopeHash String
+  targetCidr      String?
+  allowedTactics  String[]
+  allowedModules  String[]
+  notBefore       DateTime
+  expiresAt       DateTime
+  maxOperations   Int       @default(10)
+  operationsUsed  Int       @default(0)
+  salt            String
+  revokedAt       DateTime?
+  createdBy       String
+  createdAt       DateTime  @default(now())
+  ledgerEntries   OperationLedger[]
+}
+
+model OperationLedger {
+  id           String   @id @default(uuid())
+  roeTokenId   String
+  roeToken     RoeToken @relation(fields: [roeTokenId], references: [id])
+  agentName    String
+  targetIp     String
+  commandHash  String
+  outcome      String
+  veritasBlock Int?
+  timestamp    DateTime @default(now())
 }

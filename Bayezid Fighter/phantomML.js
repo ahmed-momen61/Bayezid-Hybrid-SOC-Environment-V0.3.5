@@ -105,9 +105,28 @@ const runPhantomMLEvasion = async(originalPayload, targetClassifierUrl = null, l
     const appliedLayers = [];
 
     if (layers.includes('perturbation')) {
-        evadedPayload = generateAdversarialPerturbation(evadedPayload, 0.12);
-        appliedLayers.push('FGSM-Byte-Perturbation');
-        console.log(`[👻] Layer 1: FGSM Perturbation applied (ε=0.12).`);
+        try {
+            console.log(`[👻] Layer 1: Dispatching to true FGSM Gradient Engine...`);
+            const fgsmResult = await axios.post('http://127.0.0.1:8004/api/v1/fgsm/attack', {
+                payload: evadedPayload,
+                epsilon: 0.01,
+                max_iter: 20
+            });
+            const fgsmData = fgsmResult.data;
+            if (fgsmData.status === 'evaded' || fgsmData.status === 'heuristic_fallback') {
+                evadedPayload = fgsmData.payload;
+                appliedLayers.push(`True-FGSM-${fgsmData.status}`);
+                console.log(`[👻] Layer 1: FGSM Attack ${fgsmData.status} (Iterations: ${fgsmData.iterations || 0}).`);
+            } else {
+                console.log(`[!] FGSM failed to evade (${fgsmData.status}). Falling back to heuristic.`);
+                evadedPayload = generateAdversarialPerturbation(evadedPayload, 0.12);
+                appliedLayers.push('Heuristic-Byte-Perturbation-Fallback');
+            }
+        } catch (e) {
+            console.log(`[!] FGSM Backend unreachable: ${e.message}. Using legacy byte flipping.`);
+            evadedPayload = generateAdversarialPerturbation(evadedPayload, 0.12);
+            appliedLayers.push('Heuristic-Byte-Perturbation-Fallback');
+        }
     }
 
     if (layers.includes('zerowidth')) {

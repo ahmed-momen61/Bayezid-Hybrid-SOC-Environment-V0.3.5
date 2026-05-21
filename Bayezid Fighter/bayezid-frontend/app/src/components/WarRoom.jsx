@@ -1,6 +1,53 @@
 import { useState, useEffect, useRef } from 'react'
-import { Swords, Shield, Bug, Radio, Crosshair, Lock, Zap, Eye, Send, Terminal } from 'lucide-react'
+import { Swords, Shield, Bug, Radio, Crosshair, Lock, Zap, Eye, Send, Terminal, AlertTriangle } from 'lucide-react'
 import { socket } from '../socket'
+
+const ApprovalModal = ({ op, onApprove, onDeny }) => {
+  const [timer, setTimer] = useState(op.countdown || 60);
+  
+  useEffect(() => {
+    const t = setInterval(() => {
+      setTimer(prev => {
+        if (prev <= 1) {
+          onDeny(op.operationId);
+          clearInterval(t);
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(t);
+  }, [op, onDeny]);
+
+  return (
+    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+      <div className="w-[500px] border border-rose-500/50 bg-slate-900 rounded-xl overflow-hidden shadow-[0_0_40px_rgba(244,63,94,0.2)]">
+        <div className="flex items-center gap-3 px-4 py-3 bg-rose-500/10 border-b border-rose-500/30">
+          <AlertTriangle className="w-5 h-5 text-rose-500" />
+          <h2 className="text-sm font-bold tracking-widest text-rose-400 uppercase">Operator Approval Required</h2>
+        </div>
+        <div className="p-6">
+          <p className="text-xs text-slate-300 mb-2 font-mono">HIGH-RISK OPERATION DETECTED:</p>
+          <pre className="p-4 bg-slate-950 rounded-lg text-xs font-mono text-cyan-400 border border-slate-800 whitespace-pre-wrap">
+            {op.preview}
+          </pre>
+          <div className="mt-6 flex items-center justify-between">
+            <span className="text-xs font-mono text-rose-500/80 animate-pulse">
+              Auto-DENY in: 00:{timer.toString().padStart(2, '0')}
+            </span>
+            <div className="flex gap-3">
+              <button onClick={() => onDeny(op.operationId)} className="px-4 py-2 text-xs font-bold tracking-wider text-rose-400 border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 rounded transition-colors">
+                DENY
+              </button>
+              <button onClick={() => onApprove(op.operationId)} className="px-4 py-2 text-xs font-bold tracking-wider text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 rounded transition-colors">
+                APPROVE
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const StatCard = ({ icon: Icon, label, value, color, glow }) => (
   <div className={`flex items-center gap-3 px-4 py-3 rounded-lg border ${color} backdrop-blur-sm`}>
@@ -57,18 +104,26 @@ const WarRoom = () => {
     { sender: 'System', text: 'Bayezid Cognitive Engine initialized.', type: 'system' }
   ])
   const [inputCommand, setInputCommand] = useState('')
+  const [approvalModal, setApprovalModal] = useState({ show: false, operationId: null, preview: '', countdown: 60 })
   const chatEndRef = useRef(null)
 
   useEffect(() => {
     const handleNewMessage = (data) => {
       setChatLog(prev => [...prev, data])
     }
+    
+    const handleApprovalRequest = (data) => {
+      setApprovalModal({ show: true, ...data })
+    }
+    
     socket.on('chat_message', handleNewMessage)
     socket.on('agent_action', handleNewMessage)
+    socket.on('awaiting_operator_approval', handleApprovalRequest)
     
     return () => {
       socket.off('chat_message', handleNewMessage)
       socket.off('agent_action', handleNewMessage)
+      socket.off('awaiting_operator_approval', handleApprovalRequest)
     }
   }, [])
 
@@ -84,6 +139,25 @@ const WarRoom = () => {
     setChatLog(prev => [...prev, newMsg])
     socket.emit('chat_message', newMsg)
     setInputCommand('')
+  }
+
+  const approveOperation = async (operationId) => {
+    setApprovalModal({ show: false, operationId: null, preview: '', countdown: 0 })
+    setChatLog(prev => [...prev, { sender: 'Operator', text: `Approved operation ${operationId}`, type: 'user' }])
+    try {
+      await fetch('/api/v2/socket/operator-approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operationId, approvalJWT: 'mock-operator-jwt' })
+      })
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
+  const denyOperation = (operationId) => {
+    setApprovalModal({ show: false, operationId: null, preview: '', countdown: 0 })
+    setChatLog(prev => [...prev, { sender: 'Operator', text: `Denied operation ${operationId}`, type: 'system' }])
   }
 
   const stats = [
@@ -103,7 +177,14 @@ const WarRoom = () => {
   ]
 
   return (
-    <main className="flex-1 h-full flex flex-col min-w-0 bg-slate-950/50">
+    <main className="flex-1 h-full flex flex-col min-w-0 bg-slate-950/50 relative">
+      {approvalModal.show && (
+        <ApprovalModal 
+          op={approvalModal} 
+          onApprove={approveOperation} 
+          onDeny={denyOperation} 
+        />
+      )}
       {/* Header */}
       <header className="flex items-center justify-between px-6 h-16 border-b border-slate-800 bg-slate-900/50 backdrop-blur-sm flex-shrink-0">
         <div className="flex items-center gap-4">

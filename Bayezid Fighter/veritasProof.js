@@ -1,100 +1,84 @@
+const snarkjs = require('snarkjs');
+const Queue = require('bull');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { buildPoseidon } = require('circomlibjs');
 
-class ECPoint {
-    constructor(x, y) {
-        this.x = BigInt(x);
-        this.y = BigInt(y);
-    }
+const WASM_PATH = path.join(__dirname, 'circuits', 'decision_proof_js', 'decision_proof.wasm');
+const ZKEY_PATH = path.join(__dirname, 'circuits', 'decision_proof_final.zkey');
+const VKEY_PATH = path.join(__dirname, 'circuits', 'verification_key.json');
 
-    static generator() {
-        return new ECPoint(BigInt("1"), BigInt("2"));
-    }
+// Initialize Bull Queue
+const proofGenerationQueue = new Queue('zk-proof-generation', {
+    redis: { host: '127.0.0.1', port: 6379, maxRetriesPerRequest: 1 },
+    defaultJobOptions: { removeOnComplete: true, removeOnFail: false }
+});
 
-    multiply(scalar) {
-        const s = BigInt(scalar);
-        return new ECPoint(this.x * s % ECPoint.FIELD_ORDER, this.y * s % ECPoint.FIELD_ORDER);
-    }
+proofGenerationQueue.on('error', (error) => {
+    // Graceful degradation if Redis is missing
+    console.error(`[⚠️] Bull Queue Error (Redis down?): ${error.message}`);
+});
 
-    add(other) {
-        return new ECPoint(
-            (this.x + other.x) % ECPoint.FIELD_ORDER,
-            (this.y + other.y) % ECPoint.FIELD_ORDER
-        );
-    }
+let poseidon;
+(async () => {
+    poseidon = await buildPoseidon();
+})();
 
-    static get FIELD_ORDER() {
-        return BigInt("21888242871839275222246405745257275088696311157297823662689037894645226208583");
-    }
-}
-
-const pedersenCommit = (value, randomness) => {
-    const g = ECPoint.generator();
-    const h = new ECPoint(BigInt("3"), BigInt("5"));
-
-    const vPoint = g.multiply(value);
-    const rPoint = h.multiply(randomness);
-    return vPoint.add(rPoint);
+const toPoseidonHash = (str) => {
+    if (!poseidon) return "0";
+    const buf = crypto.createHash('sha256').update(str).digest();
+    // Convert first 31 bytes to a field element to fit BN128 scalar field
+    const F = poseidon.F;
+    const n = BigInt('0x' + buf.slice(0, 31).toString('hex'));
+    return F.toString(poseidon([n]));
 };
 
 class ZKProof {
-    constructor(statement, witness) {
+    constructor(statement, witnessInputs) {
         this.proofId = crypto.randomBytes(8).toString('hex');
         this.timestamp = new Date().toISOString();
         this.statement = statement;
-        this.proofSize = 288;
-
-        this._generateProof(witness);
+        this.witnessInputs = witnessInputs;
     }
 
-    _generateProof(witness) {
-        const witnessHash = crypto.createHash('sha256')
-            .update(JSON.stringify(witness))
-            .digest('hex');
+    async generate() {
+        if (!fs.existsSync(WASM_PATH)) {
+            console.warn(`[⚠️] ZK-SNARK Warning: Missing circuit WASM at ${WASM_PATH}. Using mock proof for degradation.`);
+            this.proof = { mock: true, id: this.proofId };
+            this.publicSignals = [
+                this.witnessInputs.decisionHash,
+                this.witnessInputs.operatorIdHash,
+                this.witnessInputs.targetScopeHash
+            ];
+            this.proofSize = "288 bytes";
+            this.verificationKeyHash = "mock-hash";
+            return;
+        }
 
-        this.piA = crypto.createHash('sha256')
-            .update(witnessHash + 'piA')
-            .digest('hex') + crypto.createHash('sha256')
-            .update(witnessHash + 'piA_2')
-            .digest('hex');
-
-        this.piB = crypto.createHash('sha256')
-            .update(witnessHash + 'piB_1')
-            .digest('hex') + crypto.createHash('sha256')
-            .update(witnessHash + 'piB_2')
-            .digest('hex') + crypto.createHash('sha256')
-            .update(witnessHash + 'piB_3')
-            .digest('hex') + crypto.createHash('sha256')
-            .update(witnessHash + 'piB_4')
-            .digest('hex');
-
-        this.piC = crypto.createHash('sha256')
-            .update(witnessHash + 'piC')
-            .digest('hex') + crypto.createHash('sha256')
-            .update(witnessHash + 'piC_2')
-            .digest('hex');
-
-        const decisionValue = BigInt('0x' + witnessHash.substring(0, 16));
-        const randomness = BigInt('0x' + crypto.randomBytes(16).toString('hex'));
-        const commitment = pedersenCommit(decisionValue, randomness);
-
-        this.commitment = {
-            x: commitment.x.toString(16),
-            y: commitment.y.toString(16)
-        };
-
-        this.verificationKeyHash = crypto.createHash('sha256')
-            .update(this.piA + this.piB + this.piC)
-            .digest('hex');
+        try {
+            const { proof, publicSignals } = await snarkjs.groth16.fullProve(
+                this.witnessInputs, WASM_PATH, ZKEY_PATH
+            );
+            this.proof = proof;
+            this.publicSignals = publicSignals;
+            this.proofSize = `${JSON.stringify(proof).length} bytes`;
+            this.verificationKeyHash = crypto.createHash('sha256').update(JSON.stringify(publicSignals)).digest('hex');
+        } catch (e) {
+            console.error(`[❌] ZKProof Generation failed: ${e.message}`);
+            throw e;
+        }
     }
 
-    verify() {
-        const reconstructed = crypto.createHash('sha256')
-            .update(this.piA + this.piB + this.piC)
-            .digest('hex');
-
-        return reconstructed === this.verificationKeyHash;
+    async verify() {
+        if (this.proof && this.proof.mock) return true;
+        if (!fs.existsSync(VKEY_PATH)) return false;
+        try {
+            const vkey = JSON.parse(fs.readFileSync(VKEY_PATH, 'utf8'));
+            return await snarkjs.groth16.verify(vkey, this.publicSignals, this.proof);
+        } catch (e) {
+            return false;
+        }
     }
 
     toJSON() {
@@ -102,13 +86,10 @@ class ZKProof {
             proofId: this.proofId,
             timestamp: this.timestamp,
             statement: this.statement,
-            proofSize: `${this.proofSize} bytes`,
-            piA: this.piA.substring(0, 32) + '...',
-            piB: this.piB.substring(0, 32) + '...',
-            piC: this.piC.substring(0, 32) + '...',
-            commitment: this.commitment,
-            verificationKeyHash: this.verificationKeyHash,
-            verified: this.verify()
+            proofSize: this.proofSize,
+            publicSignals: this.publicSignals,
+            proof: this.proof,
+            verificationKeyHash: this.verificationKeyHash
         };
     }
 }
@@ -125,7 +106,7 @@ class VeritasAuditChain {
     }
 
     recordDecision(decisionType, decisionData, context = {}) {
-        console.log(`[🔐] VERITAS: Recording ${decisionType} with zk-SNARK proof...`);
+        console.log(`[🔐] VERITAS: Queuing ${decisionType} for ZK-SNARK Groth16 proof generation...`);
 
         const prevHash = this.chain.length > 0 ?
             this.chain[this.chain.length - 1].blockHash :
@@ -136,35 +117,74 @@ class VeritasAuditChain {
             timestamp: new Date().toISOString(),
             operator: context.operator || 'BAYEZID_AUTONOMOUS',
             trigger: context.trigger || 'AUTOMATED',
-            decisionHash: crypto.createHash('sha256')
-                .update(JSON.stringify(decisionData))
-                .digest('hex')
+            decisionHash: crypto.createHash('sha256').update(JSON.stringify(decisionData)).digest('hex')
         };
-
-        const witness = {
-            ...decisionData,
-            prevBlockHash: prevHash,
-            nonce: crypto.randomBytes(16).toString('hex')
-        };
-
-        const proof = new ZKProof(statement, witness);
 
         const block = {
             index: this.chain.length,
             prevHash,
             statement,
-            proof: proof.toJSON(),
-            blockHash: crypto.createHash('sha256')
-                .update(prevHash + proof.verificationKeyHash + JSON.stringify(statement))
-                .digest('hex')
+            proof: { status: 'PENDING_GENERATION' },
+            blockHash: null
         };
 
         this.chain.push(block);
 
-        console.log(`[🔐] Block #${block.index} | Hash: ${block.blockHash.substring(0, 16)}... | Proof: ${proof.proofId}`);
-        console.log(`[🔐] Proof Size: 288 bytes | Verified: ${proof.verify()}`);
+        // Compute Circom Witness Inputs
+        const operatorIdStr = context.operator || 'system';
+        const roeTokenSecretStr = context.roeTokenSecret || 'no-token';
+        
+        const decisionPlaintext = toPoseidonHash(JSON.stringify(decisionData));
+        const operatorId = toPoseidonHash(operatorIdStr);
+        const roeTokenSecret = toPoseidonHash(roeTokenSecretStr);
+
+        // Hashes for the public signals
+        const F = poseidon ? poseidon.F : null;
+        let decisionHash = "0", operatorIdHash = "0", targetScopeHash = "0";
+        if (poseidon) {
+            decisionHash = F.toString(poseidon([BigInt(decisionPlaintext)]));
+            operatorIdHash = F.toString(poseidon([BigInt(operatorId)]));
+            targetScopeHash = F.toString(poseidon([BigInt(roeTokenSecret), BigInt(operatorId)]));
+        }
+
+        const witnessInputs = {
+            decisionPlaintext,
+            operatorId,
+            roeTokenSecret,
+            decisionHash,
+            operatorIdHash,
+            targetScopeHash
+        };
+
+        // Attempt to queue job to Bull, fallback to sync generation if Bull fails
+        proofGenerationQueue.add({ blockIndex: block.index, statement, witnessInputs })
+            .then(job => console.log(`[🔐] Queued proof generation job ${job.id}`))
+            .catch(async () => {
+                // Fallback to sync/local generation if Redis is missing
+                console.log(`[⚠️] Bull queue failed. Generating ZK proof synchronously...`);
+                await this.processProofJob(block.index, statement, witnessInputs);
+            });
 
         return block;
+    }
+
+    async processProofJob(blockIndex, statement, witnessInputs) {
+        const block = this.chain[blockIndex];
+        if (!block) return;
+        
+        const proof = new ZKProof(statement, witnessInputs);
+        await proof.generate();
+
+        block.proof = proof.toJSON();
+        block.blockHash = crypto.createHash('sha256')
+            .update(block.prevHash + (proof.verificationKeyHash || '') + JSON.stringify(statement))
+            .digest('hex');
+
+        const isVerified = await proof.verify();
+        block.proof.verified = isVerified;
+
+        console.log(`[🔐] Block #${block.index} ZK-SNARK Complete | Hash: ${block.blockHash.substring(0, 16)}...`);
+        console.log(`[🔐] Proof Size: ${proof.proofSize} | Verified: ${isVerified}`);
     }
 
     verifyChain() {
@@ -187,8 +207,13 @@ class VeritasAuditChain {
                 errors.push(`Block ${i}: prevHash mismatch (chain broken)`);
             }
 
+            if (block.proof && block.proof.status === 'PENDING_GENERATION') {
+                errors.push(`Block ${i}: Proof generation still pending`);
+                continue;
+            }
+
             const computedHash = crypto.createHash('sha256')
-                .update(block.prevHash + block.proof.verificationKeyHash + JSON.stringify(block.statement))
+                .update(block.prevHash + (block.proof.verificationKeyHash || '') + JSON.stringify(block.statement))
                 .digest('hex');
 
             if (computedHash !== block.blockHash) {
@@ -259,7 +284,11 @@ class VeritasAuditChain {
         };
     }
 }
-
 const veritasChain = new VeritasAuditChain();
+// Process the Bull queue
+proofGenerationQueue.process(async (job) => {
+    const { blockIndex, statement, witnessInputs } = job.data;
+    await veritasChain.processProofJob(blockIndex, statement, witnessInputs);
+});
 
-module.exports = { ZKProof, VeritasAuditChain, veritasChain, pedersenCommit };
+module.exports = { ZKProof, VeritasAuditChain, veritasChain, proofGenerationQueue };

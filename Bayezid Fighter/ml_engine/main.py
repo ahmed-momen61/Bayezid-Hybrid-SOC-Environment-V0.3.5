@@ -20,7 +20,11 @@ if hasattr(sys.stderr, 'reconfigure'):
 
 warnings.filterwarnings('ignore')
 
+import asyncio
+import threading
 model_lock = threading.Lock()
+_retrain_lock = asyncio.Lock()
+_feedback_queue = []
 
 
 MODEL_NAME = "google/bert_uncased_L-4_H-256_A-4"
@@ -370,23 +374,32 @@ async def update_model(req: Request):
 
 @app.post("/api/v1/ml/swarm_feedback")
 async def swarm_update(req: Request):
-    global malicious_traffic
-    data = await req.json()
-    payload = data.get("payload")
-    if payload:
+    body = await req.json()
+    _feedback_queue.append(body.get("payload", ""))
+    if len(_feedback_queue) >= 32:
+        async with _retrain_lock:
+            await _flush_retrain_batch()
+    return {"status": "queued", "queue_depth": len(_feedback_queue)}
+
+async def _flush_retrain_batch():
+    global model, adwin, ewc_module, malicious_traffic
+    samples = _feedback_queue.copy()
+    _feedback_queue.clear()
+    
+    for payload in samples:
+        if not payload: continue
         try:
             features_seq = extract_features(payload)
             latest_feature = features_seq[0][-1]
             malicious_traffic = np.vstack([malicious_traffic, latest_feature]) if malicious_traffic.size else np.array([latest_feature])
-            if len(malicious_traffic) > 10000:
-                malicious_traffic = malicious_traffic[-10000:]
-            with model_lock:
-                np.save(MALICIOUS_FILE, malicious_traffic)
-            print(f"\n[🐝] SWARM ASSIMILATION: ML Sniper V2 memorized Zero-Day signature (256-dim).")
-            return {"status": "success", "message": "Zero-Day assimilated."}
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
-    return {"status": "failed", "message": "No payload provided"}
+        except Exception:
+            pass
+
+    if len(malicious_traffic) > 10000:
+        malicious_traffic = malicious_traffic[-10000:]
+    with model_lock:
+        np.save(MALICIOUS_FILE, malicious_traffic)
+    print(f"\n[🐝] SWARM ASSIMILATION: ML Sniper V2 memorized Zero-Day signature (256-dim) in batch.")
 
 
 if __name__ == "__main__":

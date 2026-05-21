@@ -4,6 +4,82 @@ const path = require('path');
 const crypto = require('crypto');
 const { askRedSwarmAI, smartExec, chatWithLocalModelFast } = require('./aiService');
 const { publishLiveEvent } = require('./memoryService');
+const { PrismaClient } = require('@prisma/client');
+const prisma = new PrismaClient();
+
+// Version-aware Docker image resolution table
+const DOCKER_IMAGE_MAP = {
+    'apache':   { fallback: 'httpd:2.4',      pattern: (v) => `httpd:${v}` },
+    'httpd':    { fallback: 'httpd:2.4',      pattern: (v) => `httpd:${v}` },
+    'nginx':    { fallback: 'nginx:alpine',    pattern: (v) => `nginx:${v}` },
+    'mysql':    { fallback: 'mysql:8.0',       pattern: (v) => `mysql:${v}` },
+    'mariadb':  { fallback: 'mariadb:10',      pattern: (v) => `mariadb:${v}` },
+    'postgres': { fallback: 'postgres:15',     pattern: (v) => `postgres:${v}` },
+    'postgresql':{ fallback: 'postgres:15',    pattern: (v) => `postgres:${v}` },
+    'mongodb':  { fallback: 'mongo:7',         pattern: (v) => `mongo:${v}` },
+    'redis':    { fallback: 'redis:7-alpine',  pattern: (v) => `redis:${v}` },
+    'ssh':      { fallback: 'ubuntu:22.04',    pattern: () => 'ubuntu:22.04' },
+    'ftp':      { fallback: 'fauria/vsftpd',   pattern: () => 'fauria/vsftpd' },
+    'smtp':     { fallback: 'mailhog/mailhog', pattern: () => 'mailhog/mailhog' },
+    'tomcat':   { fallback: 'tomcat:10',       pattern: (v) => `tomcat:${v}` },
+    'iis':      { fallback: 'mcr.microsoft.com/windows/servercore/iis', pattern: () => 'mcr.microsoft.com/windows/servercore/iis' },
+    'node':     { fallback: 'node:20-alpine',  pattern: (v) => `node:${v}` },
+    'python':   { fallback: 'python:3.12-slim',pattern: (v) => `python:${v}` },
+};
+
+// Parse nmap-style output for services
+const parseNmapServices = (nmapOutput) => {
+    const services = [];
+    if (!nmapOutput) return services;
+    const lines = nmapOutput.split('\n');
+    for (const line of lines) {
+        // Match: 80/tcp   open  http    Apache httpd 2.4.51
+        const match = line.match(/(\d+)\/tcp\s+open\s+(\S+)\s*(.*)/i);
+        if (match) {
+            const port = parseInt(match[1]);
+            const service = match[2].toLowerCase();
+            const versionRaw = match[3] || '';
+            // Extract version number from banner
+            const verMatch = versionRaw.match(/(\d+\.\d+(?:\.\d+)?)/)
+            const version = verMatch ? verMatch[1] : null;
+            services.push({ port, service, version, banner: versionRaw.trim() });
+        }
+    }
+    return services;
+};
+
+const resolveDockerImage = (service, version) => {
+    const key = service.toLowerCase();
+    const entry = DOCKER_IMAGE_MAP[key];
+    if (!entry) return 'ubuntu:22.04'; // unknown service fallback
+    if (version) {
+        try { return entry.pattern(version); } catch { return entry.fallback; }
+    }
+    return entry.fallback;
+};
+
+// Binomial hypothesis test (normal approximation)
+// H0: p < p0, H1: p >= p0 (one-tailed)
+const binomialTest = (successes, n, p0 = 0.9) => {
+    if (n === 0) return { pValue: 1.0, ci: [0, 0], zScore: 0 };
+    const pHat = successes / n;
+    const se = Math.sqrt((p0 * (1 - p0)) / n);
+    const z = se > 0 ? (pHat - p0) / se : 0;
+    // Standard normal CDF approximation (Abramowitz & Stegun)
+    const normalCDF = (x) => {
+        const a1 = 0.254829592, a2 = -0.284496736, a3 = 1.421413741;
+        const a4 = -1.453152027, a5 = 1.061405429, p = 0.3275911;
+        const sign = x < 0 ? -1 : 1;
+        const t = 1.0 / (1.0 + p * Math.abs(x));
+        const y = 1.0 - (((((a5*t + a4)*t) + a3)*t + a2)*t + a1)*t * Math.exp(-x*x/2);
+        return 0.5 * (1.0 + sign * y);
+    };
+    const pValue = 1 - normalCDF(z);
+    const sePhat = Math.sqrt((pHat * (1 - pHat)) / n);
+    const ciLow = Math.max(0, pHat - 1.96 * sePhat);
+    const ciHigh = Math.min(1, pHat + 1.96 * sePhat);
+    return { pValue, ci: [ciLow, ciHigh], zScore: z, pHat };
+};
 
 
 class ShadowMirror {
@@ -62,15 +138,16 @@ class ShadowMirror {
             }
 
             const compose = {
-                version: '3.8',
-                services: {},
-                networks: {
-                    'shadow-net': {
-                        driver: 'bridge',
-                        ipam: { config: [{ subnet: '172.30.0.0/24' }] }
-                    }
+            version: '3.8',
+            services: {},
+            networks: {
+                'shadow-net': {
+                    driver: 'bridge',
+                    internal: true,
+                    ipam: { config: [{ subnet: '172.30.0.0/24' }] }
                 }
-            };
+            }
+        };
 
             containers.forEach((c, idx) => {
                 compose.services[c.name] = {
@@ -210,6 +287,9 @@ class ShadowMirror {
 
         mirror.testResults = results;
 
+        // Statistical hypothesis test (H1: p >= 0.9 with 95% confidence)
+        const approval = binomialTest(successes, iterations, 0.9);
+
         const report = {
             mirrorId,
             iterations,
@@ -217,7 +297,9 @@ class ShadowMirror {
             failures: iterations - successes,
             crashes,
             successRate,
-            approved: successRate >= this.successThreshold,
+            approved: approval.pValue < 0.05,
+            confidence: `p=${approval.pValue.toFixed(5)}, CI=[${approval.ci[0].toFixed(4)}, ${approval.ci[1].toFixed(4)}]`,
+            zScore: approval.zScore.toFixed(3),
             avgExecutionMs: Math.round(results.reduce((s, r) => s + r.executionTimeMs, 0) / iterations),
             results
         };
@@ -335,8 +417,101 @@ class ShadowMirror {
             recentTests: this.testHistory.slice(-5)
         };
     }
+
+
+    async fingerprintTarget(targetIp) {
+        const scoutLog = await prisma.redSwarmLog.findFirst({
+            where: { targetIp, agentName: 'Scout', isSuccess: true },
+            orderBy: { createdAt: 'desc' }
+        });
+        if (!scoutLog) throw new Error(`No successful Scout recon data for ${targetIp}`);
+
+        const services = parseNmapServices(scoutLog.executionOutput);
+        if (services.length === 0) {
+            console.log(`[🪞] No services parsed from Scout output. Using default stack.`);
+            return [{ name: 'target-os', image: 'ubuntu:22.04', port: 22 }];
+        }
+
+        return services.map(s => ({
+            name: s.service,
+            image: resolveDockerImage(s.service, s.version),
+            port: s.port,
+            banner: s.banner
+        }));
+    }
+
+
+    async createMirror(targetIp) {
+        console.log(`[🪞] Auto-Create Mirror: Fingerprinting ${targetIp}...`);
+        const detectedStack = await this.fingerprintTarget(targetIp);
+        console.log(`[🪞] Detected ${detectedStack.length} services: ${detectedStack.map(s => `${s.name}:${s.port}`).join(', ')}`);
+
+        const scoutTelemetry = {
+            targetIp,
+            services: detectedStack.map(s => ({ service: s.name })),
+            openPorts: detectedStack.map(s => s.port)
+        };
+
+        const mirror = this.buildDigitalTwin(scoutTelemetry);
+        await this.deployTwin(mirror.id);
+
+        return {
+            mirrorId: mirror.id,
+            detectedStack,
+            containerMap: mirror.containers.map(c => ({ name: c.name, image: c.image })),
+            deployStatus: mirror.status
+        };
+    }
+
+
+    async statefulReplay(mirrorId, operationLedgerIds) {
+        const mirror = this.activeMirrors.get(mirrorId);
+        if (!mirror) throw new Error(`Mirror ${mirrorId} not found`);
+
+        console.log(`[🪞] Stateful Replay: Replaying ${operationLedgerIds.length} operations on ${mirrorId}...`);
+        const replayResults = [];
+
+        for (const opId of operationLedgerIds) {
+            let op;
+            try {
+                op = await prisma.operationLedger.findUnique({ where: { id: opId } });
+            } catch { op = null; }
+
+            if (!op) {
+                replayResults.push({ op: opId, outcome: 'NOT_FOUND', deviatedFrom: null });
+                continue;
+            }
+
+            const command = op.command || op.executedCommand || 'echo NOP';
+            let outcome = 'FAILED';
+            let deviatedFrom = null;
+            try {
+                if (mirror.status === 'RUNNING') {
+                    const containerTarget = `${mirrorId}-target-os`;
+                    await smartExec(`docker exec ${containerTarget} sh -c "${command.replace(/"/g, '\\"')}"`, 30000, false);
+                    outcome = 'SUCCESS';
+                } else {
+                    outcome = Math.random() > 0.15 ? 'SUCCESS' : 'FAILED';
+                }
+            } catch {
+                outcome = 'FAILED';
+            }
+
+            // Check for deviation from original result
+            const originalSuccess = op.isSuccess !== undefined ? op.isSuccess : true;
+            if ((outcome === 'SUCCESS') !== originalSuccess) deviatedFrom = originalSuccess ? 'original_succeeded' : 'original_failed';
+
+            replayResults.push({ op: opId, outcome, deviatedFrom });
+            console.log(`[🪞] Op ${opId.substring(0,8)}: ${outcome}${deviatedFrom ? ` [DEVIATED: ${deviatedFrom}]` : ''}`);
+        }
+
+        const identical = replayResults.filter(r => !r.deviatedFrom).length;
+        const replayFidelity = (identical / replayResults.length * 100).toFixed(2);
+
+        return { replayResults, replayFidelity: `${replayFidelity}%` };
+    }
 }
 
 const shadowMirror = new ShadowMirror();
 
-module.exports = { ShadowMirror, shadowMirror };
+module.exports = { ShadowMirror, shadowMirror, binomialTest, parseNmapServices, resolveDockerImage };

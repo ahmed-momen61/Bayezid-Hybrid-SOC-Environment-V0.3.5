@@ -2,6 +2,7 @@ const axios = require('axios');
 const itsmService = require('./itsmService');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { enrichContext } = require('./ragService');
+const { publishAgentEvent, getRecentAgentEvents, saveAgentMemoryVector, semanticAgentSearch } = require('./memoryService');
 require('dotenv').config();
 
 const { PrismaClient } = require('@prisma/client');
@@ -51,47 +52,29 @@ const sanitizePayloadForAI = (rawPayload) => {
     return safePayload;
 };
 
-const sanitizeCommand = (command) => {
-    if (process.env.ALLOW_UNSANITIZED_EXEC === 'true') return command;
+const ALLOWED_BINARIES = new Set([
+    'nmap', 'curl', 'sqlmap', 'hydra', 'nikto', 'gobuster',
+    'python3', 'bash', 'sh', 'nc', 'ping', 'traceroute'
+]);
+const SHELL_INJECTION_PATTERN = /[;&|`$<>\n\r]|(\.\.)|(\/{2,})|sudo(?!\s+nmap|\s+iptables|\s+ip\s|\s+bpftool)/;
 
-    const ALLOWED_PREFIXES = [
-        'nmap', 'nikto', 'sqlmap', 'hydra', 'gobuster', 'ffuf', 'curl', 'wget',
-        'nuclei', 'wfuzz', 'dirb', 'whatweb', 'sslscan', 'testssl',
-        'python3', 'py', 'pip', 'node', 'cat', 'echo', 'grep', 'find',
-        'ls', 'dir', 'type', 'whoami', 'id', 'hostname', 'netstat', 'ss',
-        'ip', 'ifconfig', 'ping', 'traceroute', 'dig', 'nslookup', 'ollama'
-    ];
-
-    const BLOCKED_PATTERNS = [
-        /;\s*rm\s/i,
-        /;\s*dd\s/i,
-        /\|\s*bash/i,
-        /\|\s*sh\b/i,
-        /\$\(/,
-        /`/
-    ];
-
-    const baseCommand = command.trim().split(/\s+/)[0].replace(/^.*[\\/]/, '');
-
-    const isAllowed = ALLOWED_PREFIXES.some(prefix =>
-        baseCommand.toLowerCase() === prefix.toLowerCase()
-    );
-
-    const isBlocked = BLOCKED_PATTERNS.some(pattern => pattern.test(command));
-
-    if (!isAllowed || isBlocked) {
-        console.log(`\n[🛡️ COMMAND BLOCKED] Denied execution of: ${command}`);
-        return null;
+const validateCommand = (cmd) => {
+    if (SHELL_INJECTION_PATTERN.test(cmd)) {
+        throw new Error(`SECURITY_VETO: Rejected command pattern: ${cmd.slice(0,80)}`);
     }
-
-    return command;
+    const binary = cmd.trim().split(/\s+/)[0];
+    if (!ALLOWED_BINARIES.has(binary)) {
+        throw new Error(`SECURITY_VETO: Binary '${binary}' not in allowlist`);
+    }
 };
 
 const smartExec = async(command, timeoutMs, isBackground) => {
-    const sanitized = sanitizeCommand(command);
-    if (sanitized === null) {
-        return { stdout: "", stderr: "[🛡️ COMMAND BLOCKED] Command failed security validation." };
+    try {
+        validateCommand(command);
+    } catch (e) {
+        return { stdout: "", stderr: `[🛡️ COMMAND BLOCKED] ${e.message}` };
     }
+    const sanitized = command;
 
     if (isBackground) {
         const logFile = path.join(__dirname, `job_${Date.now()}.log`);
@@ -125,7 +108,29 @@ const smartExec = async(command, timeoutMs, isBackground) => {
     }
 };
 
-const getSharedMemory = async(targetIp) => {
+const getSharedMemory = async(targetIp, contextHint = '') => {
+    const layers = [];
+
+    // Layer 1: Redis Streams — recent chronological events
+    try {
+        const streamEvents = await getRecentAgentEvents(targetIp, 20);
+        if (streamEvents.length > 0) {
+            layers.push('--- STREAM EVENTS (Recent) ---\n' + streamEvents.join('\n'));
+        }
+    } catch (e) {}
+
+    // Layer 2: FAISS Semantic Cache — contextually relevant memories
+    try {
+        const query = contextHint || `offensive operation against ${targetIp}`;
+        const semanticHits = await semanticAgentSearch(targetIp, query, 5);
+        if (semanticHits.length > 0) {
+            layers.push('--- SEMANTIC MEMORY (Relevant) ---\n' + semanticHits.join('\n'));
+        }
+    } catch (e) {}
+
+    if (layers.length > 0) return layers.join('\n\n');
+
+    // Fallback: Legacy DB read if both layers empty
     try {
         const logs = await prisma.redSwarmLog.findMany({
             where: { targetIp: targetIp, isSuccess: true },
@@ -548,6 +553,8 @@ const runScoutAgent = async(targetInfo, customInstructions = "") => {
         }
 
         await prisma.redSwarmLog.create({ data: { targetIp: targetInfo, agentName: "Scout", assignedTask: "Recon", executedCommand: finalCommand, executionOutput: executionOutput, isSuccess: success } });
+        publishAgentEvent(targetInfo, 'Scout', { action: 'Recon', command: finalCommand, result: executionOutput, success }).catch(() => {});
+        saveAgentMemoryVector(targetInfo, `[Scout] ${finalCommand} → ${(executionOutput || '').substring(0, 500)}`).catch(() => {});
         return { agent: "Scout", scan_results: executionOutput, next_action: "Hand over to Breacher." };
     } catch (error) { console.error('[-] Scout Error:', error.message); return null; }
 };
@@ -599,6 +606,8 @@ const runBreacherAgent = async(targetInfo, scanResults, customInstructions = "")
         }
 
         await prisma.redSwarmLog.create({ data: { targetIp: targetInfo, agentName: "Breacher", assignedTask: "Initial Foothold", executedCommand: finalCommand, executionOutput: executionOutput, isSuccess: success } });
+        publishAgentEvent(targetInfo, 'Breacher', { action: 'Initial Foothold', command: finalCommand, result: executionOutput, success }).catch(() => {});
+        saveAgentMemoryVector(targetInfo, `[Breacher] ${finalCommand} → ${(executionOutput || '').substring(0, 500)}`).catch(() => {});
         return { agent: "Breacher", output: executionOutput };
     } catch (error) { console.error('[-] Breacher Error:', error.message); return null; }
 };
@@ -658,6 +667,8 @@ const runPhantomAgent = async(targetInfo, shellContext, customInstructions = "",
         }
 
         await prisma.redSwarmLog.create({ data: { targetIp: targetInfo, agentName: "Phantom", assignedTask: "Privilege Escalation", executedCommand: finalCommand, executionOutput: executionOutput, isSuccess: success } });
+        publishAgentEvent(targetInfo, 'Phantom', { action: 'Privilege Escalation', command: finalCommand, result: executionOutput, success }).catch(() => {});
+        saveAgentMemoryVector(targetInfo, `[Phantom] ${finalCommand} → ${(executionOutput || '').substring(0, 500)}`).catch(() => {});
         return { agent: "Phantom", output: executionOutput };
     } catch (error) { console.error('[-] Phantom Error:', error.message); return null; }
 };
@@ -709,6 +720,8 @@ const runChameleonAgent = async(targetInfo, failedPayload, wafContext, customIns
         }
 
         await prisma.redSwarmLog.create({ data: { targetIp: targetInfo, agentName: "Chameleon", assignedTask: aiDecision.action_type, executedCommand: finalCommand, executionOutput: executionOutput, isSuccess: success } });
+        publishAgentEvent(targetInfo, 'Chameleon', { action: aiDecision.action_type, command: finalCommand, result: executionOutput, success }).catch(() => {});
+        saveAgentMemoryVector(targetInfo, `[Chameleon] ${aiDecision.action_type}: ${finalCommand} → ${(executionOutput || '').substring(0, 500)}`).catch(() => {});
         return { agent: "Chameleon", output: executionOutput };
     } catch (error) {
         console.error('[-] Chameleon Error:', error.message);
@@ -1375,28 +1388,22 @@ const runZeroDayForgeAgent = async(vulnContext, maxRetries = 3) => {
         console.log(`\n[🔥] Forge Payload Generated by AI Waterfall:`);
         console.log(`--------------------------------------------------\n\x1b[33m${pythonCode}\x1b[0m\n--------------------------------------------------`);
 
-        const fs = require('fs');
-        const path = require('path');
-        const payloadFile = path.join(__dirname, `forge_exploit_${Date.now()}.py`);
-        fs.writeFileSync(payloadFile, pythonCode);
-
-
         try {
-            console.log(`[⚒️] Verifying syntax and OS compatibility...`);
+            console.log(`[⚒️] Verifying syntax via In-Memory AST check (Zero Disk Write)...`);
 
+            const encodedScript = Buffer.from(pythonCode).toString('base64');
 
             if (process.platform === 'win32') {
-                console.log(`[+] Windows Host Detected: Bypassing strict Python syntax compiler check.`);
+                const winAstCheck = `py -c "import ast,base64; ast.parse(base64.b64decode('${encodedScript}').decode()); print('VALID')"`;
+                const { stdout } = await smartExec(winAstCheck, 10000, false);
+                if (!stdout.includes('VALID')) throw new Error('AST validation failed');
             } else {
-                const compileCmd = `python3 -m py_compile "${payloadFile}"`;
-                await smartExec(compileCmd, 15000, false);
+                const astCheckCmd = `echo ${encodedScript} | base64 -d | python3 -c "import ast,sys; ast.parse(sys.stdin.read()); print('VALID')"`;
+                const { stdout } = await smartExec(astCheckCmd, 10000, false);
+                if (!stdout.includes('VALID')) throw new Error('AST validation failed');
             }
 
-
-
             console.log(`[+] Forge Verification Success! The exploit is structurally perfect and weaponized.`);
-
-            fs.unlinkSync(payloadFile);
 
             return {
                 status: "success",
@@ -1407,8 +1414,6 @@ const runZeroDayForgeAgent = async(vulnContext, maxRetries = 3) => {
         } catch (err) {
             let realError = err.stderr || err.stdout || err.message;
             console.log(`[🛑] Forge Compilation Error Intercepted:\n${realError.substring(0, 200).trim()}...`);
-
-            if (fs.existsSync(payloadFile)) fs.unlinkSync(payloadFile);
 
             if (attempt === maxRetries) {
                 console.log(`[🚨] Forge exhausted all attempts. Exploit needs human review.`);

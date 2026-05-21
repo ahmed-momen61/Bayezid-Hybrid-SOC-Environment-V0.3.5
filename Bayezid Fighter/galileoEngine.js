@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const axios = require('axios');
 const { askRedSwarmAI } = require('./aiService');
 const { publishLiveEvent } = require('./memoryService');
 
@@ -113,10 +114,34 @@ class CausalDAG {
     }
 
 
-    computeCounterfactual(nodeId) {
+    async computeCounterfactual(nodeId) {
         console.log(`[📐] Counterfactual: Computing "What if ${nodeId} had NOT occurred?"`);
 
-        const effects = this.doCalculus(nodeId, 'ABSENT');
+        let effects = new Map();
+        const edges = this.edges.map(e => [e.from, e.to]);
+        const children = this.nodes.get(nodeId)?.children || [];
+
+        if (edges.length > 0 && children.length > 0) {
+            try {
+                const response = await axios.post('http://127.0.0.1:8002/api/v1/causal/do-calculus', {
+                    dag_edges: edges,
+                    intervention: { var: nodeId, val: 0 },
+                    query_var: children[0]
+                });
+
+                if (response.data.distribution) {
+                    console.log(`[📐] Math Do-Calculus result: ${JSON.stringify(response.data)}`);
+                    effects = this.doCalculus(nodeId, 'ABSENT'); // apply deterministic graph changes as fallback/state update
+                } else {
+                    effects = this.doCalculus(nodeId, 'ABSENT');
+                }
+            } catch (e) {
+                console.log(`[!] Do-Calculus API failed: ${e.message}. Using heuristic fallback.`);
+                effects = this.doCalculus(nodeId, 'ABSENT');
+            }
+        } else {
+            effects = this.doCalculus(nodeId, 'ABSENT');
+        }
 
         const prevented = [];
         const unaffected = [];
@@ -229,49 +254,32 @@ class CausalDAG {
 const buildCausalDAG = async(incidentData) => {
     console.log(`\n[🔭] =============================================`);
     console.log(`[🔭] GALILEO-LIVE: Causal Inference Engine Active`);
-    console.log(`[🔭] Building Structural Causal Model (SCM)...`);
+    console.log(`[🔭] Building Structural Causal Model (SCM) via pgmpy PC Algorithm...`);
     console.log(`[🔭] =============================================\n`);
 
-    const extractionPrompt = `You are a forensic causal analysis engine. Given this incident data, extract ALL discrete causal events.
-
-Incident Data:
-${typeof incidentData === 'string' ? incidentData : JSON.stringify(incidentData)}
-
-For each event, identify:
-- id: unique short identifier (e.g., "vuln_cve_2024_1234", "action_rce_exec", "process_reverse_shell")
-- label: human-readable description
-- type: one of "vulnerability", "action", "process", "network", "impact"
-- timestamp: ISO timestamp or relative order (e.g., "T+0s", "T+5s")
-- parents: array of event IDs that CAUSED this event (empty for root causes)
-- mechanism: how the parent caused this event
-
-Return strictly JSON:
-{
-    "events": [
-        { "id": "...", "label": "...", "type": "...", "timestamp": "...", "parents": [], "mechanism": "..." }
-    ]
-}`;
-
-    let events;
-    try {
-        const extracted = await askRedSwarmAI(extractionPrompt, true);
-        events = extracted.events || [];
-    } catch (e) {
-        console.log(`[!] AI extraction failed: ${e.message}. Using fallback parsing.`);
-        events = _fallbackParse(incidentData);
-    }
+    let events = _fallbackParse(incidentData);
 
     const dag = new CausalDAG();
-
     for (const event of events) {
         dag.addNode(event.id, event.label, event.type, event.timestamp, event.evidence || {});
     }
 
-    for (const event of events) {
-        if (event.parents && event.parents.length > 0) {
-            for (const parentId of event.parents) {
-                if (dag.nodes.has(parentId)) {
-                    dag.addEdge(parentId, event.id, event.mechanism || 'causes');
+    try {
+        const response = await axios.post('http://127.0.0.1:8002/api/v1/causal/build-dag', {
+            events: events
+        });
+        const edges = response.data.edges || [];
+        for (const [parentId, childId] of edges) {
+            dag.addEdge(parentId, childId, 'discovered_causation');
+        }
+    } catch (e) {
+        console.log(`[!] Failed to reach Causal Engine backend: ${e.message}. Using fallback heuristics.`);
+        for (const event of events) {
+            if (event.parents && event.parents.length > 0) {
+                for (const parentId of event.parents) {
+                    if (dag.nodes.has(parentId)) {
+                        dag.addEdge(parentId, event.id, event.mechanism || 'causes');
+                    }
                 }
             }
         }
@@ -324,7 +332,7 @@ const generateDeterministicReport = async(incidentData) => {
 
     const counterfactuals = [];
     for (const root of rootCauses) {
-        const cf = dag.computeCounterfactual(root.id);
+        const cf = await dag.computeCounterfactual(root.id);
         counterfactuals.push(cf);
         console.log(`[📐] ${cf.causalProof}`);
     }

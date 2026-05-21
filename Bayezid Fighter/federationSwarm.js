@@ -86,6 +86,21 @@ class FederatedLocalModel {
             this.gradients[i] = this.weights[i] - prevWeights[i];
         }
 
+        const MAX_GRAD_NORM = 5.0;
+        const norm = this._norm(this.gradients);
+        if (norm > MAX_GRAD_NORM) {
+            for (let i = 0; i < this.modelDim; i++) {
+                this.gradients[i] = this.gradients[i] * (MAX_GRAD_NORM / norm);
+            }
+        }
+
+        const sensitivity = MAX_GRAD_NORM;
+        const epsilon = 0.1;
+        const b = sensitivity / epsilon;
+        for (let i = 0; i < this.modelDim; i++) {
+            this.gradients[i] = this.gradients[i] + (Math.random() < 0.5 ? 1 : -1) * (-b * Math.log(1 - Math.random()));
+        }
+
         this.trainingRounds++;
         console.log(`[🐝] Node ${this.nodeId}: Local training complete. Gradient norm: ${this._norm(this.gradients).toFixed(6)}`);
 
@@ -160,6 +175,21 @@ class FederationAggregator {
     }
 
 
+    _standardFedAvg(updates) {
+        const aggregated = new Float32Array(this.modelDim);
+        let totalData = 0;
+        for (const update of updates) {
+            totalData += update.dataSize;
+        }
+        for (const update of updates) {
+            const weight = update.dataSize / totalData;
+            for (let i = 0; i < this.modelDim; i++) {
+                aggregated[i] += update.gradients[i] * weight;
+            }
+        }
+        return aggregated;
+    }
+
     aggregate() {
         if (this.pendingUpdates.size === 0) {
             console.log(`[⚠️] No pending updates to aggregate.`);
@@ -179,57 +209,37 @@ class FederationAggregator {
             }
         }
 
-        const norms = [];
-        const nodeIds = [];
-        for (const [nodeId, update] of this.pendingUpdates) {
-            norms.push(this._norm(update.gradients));
-            nodeIds.push(nodeId);
-        }
-        const sortedNorms = [...norms].sort((a, b) => a - b);
-        const medianNorm = sortedNorms[Math.floor(sortedNorms.length / 2)];
-        const normThreshold = medianNorm * 3;
+        const updates = [...this.pendingUpdates.values()];
+        let aggregated;
 
-        const validUpdates = new Map();
-        for (let idx = 0; idx < nodeIds.length; idx++) {
-            if (norms[idx] > normThreshold && normThreshold > 0) {
-                console.log(`[🛡️] BFT OUTLIER REJECTED: Node ${nodeIds[idx]} norm=${norms[idx].toFixed(6)} exceeds 3x median (${medianNorm.toFixed(6)})`);
-            } else {
-                validUpdates.set(nodeIds[idx], this.pendingUpdates.get(nodeIds[idx]));
-            }
-        }
-
-        if (validUpdates.size === 0) {
-            console.log(`[⚠️] All updates rejected as outliers. Skipping round.`);
-            this.pendingUpdates.clear();
-            return null;
-        }
-
-        const aggregated = new Float32Array(this.modelDim);
-
-        if (validUpdates.size >= 3) {
-            console.log(`[🛡️] BFT: Using coordinate-wise median aggregation (${validUpdates.size} nodes).`);
-            const allGradients = [];
-            for (const [, update] of validUpdates) {
-                allGradients.push(update.gradients);
-            }
-            for (let i = 0; i < this.modelDim; i++) {
-                const vals = allGradients.map(g => g[i]).sort((a, b) => a - b);
-                const mid = Math.floor(vals.length / 2);
-                aggregated[i] = (vals.length % 2 === 0) ? (vals[mid - 1] + vals[mid]) / 2 : vals[mid];
-            }
-        } else {
+        if (updates.length < 3) {
             console.log(`[🌐] FedAvg fallback (< 3 valid nodes).`);
-            let totalData = 0;
-            for (const [, update] of validUpdates) {
-                totalData += update.dataSize;
-            }
-            for (const [nodeId, update] of validUpdates) {
-                const weight = update.dataSize / totalData;
-                for (let i = 0; i < this.modelDim; i++) {
-                    aggregated[i] += update.gradients[i] * weight;
-                }
-                console.log(`[🌐] Node ${nodeId}: weight=${weight.toFixed(3)} (${update.dataSize} samples)`);
-            }
+            aggregated = this._standardFedAvg(updates);
+        } else {
+            console.log(`[🛡️] BFT: Using Multi-Krum Byzantine Robust Aggregation (${updates.length} nodes).`);
+            const n = updates.length;
+            const f = Math.floor(n / 3);
+
+            const distances = updates.map((ui, i) => {
+                const neighborDists = updates.map((uj, j) => {
+                    if (i === j) return Infinity;
+                    let dist = 0;
+                    for (let k = 0; k < this.modelDim; k++) {
+                        dist += Math.pow(ui.gradients[k] - uj.gradients[k], 2);
+                    }
+                    return Math.sqrt(dist);
+                }).sort((a, b) => a - b);
+                return neighborDists.slice(0, n - f - 2).reduce((s, d) => s + d, 0);
+            });
+
+            const m = n - f;
+            const selected = distances
+                .map((d, i) => ({ d, i }))
+                .sort((a, b) => a.d - b.d)
+                .slice(0, m)
+                .map(({ i }) => updates[i]);
+
+            aggregated = this._standardFedAvg(selected);
         }
 
         for (let i = 0; i < this.modelDim; i++) {
@@ -237,13 +247,13 @@ class FederationAggregator {
         }
 
         let totalData = 0;
-        for (const [, update] of validUpdates) {
+        for (const update of updates) {
             totalData += update.dataSize;
         }
 
         const roundResult = {
             round: this.roundNumber,
-            nodes: validUpdates.size,
+            nodes: updates.length,
             totalData,
             aggregatedNorm: this._norm(aggregated),
             globalWeightsNorm: this._norm(this.globalWeights),
