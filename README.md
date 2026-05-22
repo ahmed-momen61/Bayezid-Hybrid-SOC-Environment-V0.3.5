@@ -7,7 +7,7 @@
 ![Version](https://img.shields.io/badge/Version-0.3.5-red.svg)
 ![Node.js](https://img.shields.io/badge/Node.js-20.x-green.svg)
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
-![Prisma](https://img.shields.io/badge/ORM-Prisma-white.svg)
+![SQLite](https://img.shields.io/badge/Telemetry-SQLite3-white.svg)
 ![AI-Powered](https://img.shields.io/badge/AI-Cognitive_Multi_Agent-orange.svg)
 ![ML](https://img.shields.io/badge/ML-Isolation_Forest-yellow.svg)
 ![Vector-DB](https://img.shields.io/badge/Memory-pgvector-purple.svg)
@@ -19,9 +19,9 @@ By merging **Vector-Based Institutional Memory**, **Encrypted Swarm Intelligence
 
 ---
 
-## V0.3.5 Evolutionary Upgrades (The 4 Phases)
+## V0.3.5 Evolutionary Upgrades (The 5 Phases)
 
-The platform has been heavily augmented with four highly advanced evolutionary phases, equipping security teams with unparalleled defensive, offensive, and cryptographic capabilities.
+The platform has been heavily augmented with highly advanced evolutionary phases, equipping security teams with unparalleled defensive, offensive, reporting, and cryptographic capabilities.
 
 ### Phase 1: Autonomous Tarpit & Reinforcement Learning
 
@@ -31,7 +31,6 @@ The platform has been heavily augmented with four highly advanced evolutionary p
 
 * **Live-Stream Memory Bus**: Low-latency Redis Streams replace traditional database polling for real-time Pub/Sub event broadcasting. Semantic Vector Caching via FAISS index provides sub-millisecond context retrieval for malicious payloads.
 
-
 ### Phase 2: Offensive Supremacy & In-Memory Lethality
 
 * **Project CHIMERA-X (In-Memory Polymorphic Lethality)**: Bypasses static evasion techniques. Exploits are mutated at the LLVM-IR and Abstract Syntax Tree (AST) levels, generating syntactically unique binaries. Executes payloads directly from RAM (Zero-Touch OS) using process hollowing and anonymous memory mappings, neutralizing standard EDR telemetry.
@@ -40,7 +39,6 @@ The platform has been heavily augmented with four highly advanced evolutionary p
 
 * **Project HYDRA (Protocol Hopping C2)**: Command and Control traffic dynamically shifts across legitimate API endpoints (e.g., Slack, GitHub, DNS TXT) to evade network-level heuristic detection.
 
-
 ### Phase 3: Mathematical Causality & Pre-emptive Network Dominance
 
 * **Project GALILEO-LIVE (Mathematical Causal Inference)**: Replaces probabilistic LLM hallucinations with strict Structural Causal Models (SCMs) and Judea Pearl’s Do-Calculus. Generates mathematically proven, deterministic forensic Directed Acyclic Graphs (DAGs) for Root Cause Analysis.
@@ -48,7 +46,6 @@ The platform has been heavily augmented with four highly advanced evolutionary p
 * **Project MNEMON (Deep Execution Memory Forensics)**: Advanced eBPF syscall probes (`mmap`, `mprotect`, `ptrace`, `memfd_create`) instrument memory-level operations. Rogue processes attempting fileless execution or W^X violations are terminated via kernel-level `SIGKILL` before CPU execution.
 
 * **Project ORACLE-G (Graph Neural Network Topology)**: A live GNN maps the corporate fabric. It uses GraphSAGE message passing to predict lateral movement probabilities and autonomously generates pre-emptive network isolation rules (via `iptables`) to neutralize threats before they spread.
-
 
 ### Phase 4: Pre-Flight Validation & Cryptographic Trust
 
@@ -59,6 +56,14 @@ The platform has been heavily augmented with four highly advanced evolutionary p
 * **Project FEDERATION (Differential Federated Swarm ML)**: Distributed enterprise nodes collaborate on threat intelligence without exposing raw telemetry. Local models share only gradient deltas protected by Laplace ε-differential privacy, which are aggregated via FedAvg for collective zero-day immunity.
 
 * **Project BAYEZID-BRAIN (Live LLM Fine-Tuning)**: Continuously harvests successful playbook executions, causal graphs, and red-team operations to train self-improving LoRA adapters. Hyper-specializes local LLMs (e.g., Qwen) to the specific architectural quirks of the enterprise.
+
+### Phase 5: Enterprise Reporting & Hyper-Optimized Telemetry
+
+* **High-Velocity SQLite Engine**: The core telemetry hub has migrated to a hyper-optimized SQLite database (`telemetry.db`), eradicating network latency and capturing thousands of discrete Red/Blue/Purple swarm events with mathematical precision.
+
+* **Multi-Dimensional CTI Reporting**: Fully automated, endpoint-routed Cyber Threat Intelligence. Bayezid generates deep Markdown reports directly into categorized endpoints (`/reports/CTI_Intel`, `/reports/DevSecOps_Patching`, `/reports/IR_Tier1_Alerts`, `/reports/Tier3_Forensics`), armed with YARA rules, Pseudo-CVEs, and exact chronological SQL unions.
+
+* **Domain-Driven Architecture**: The ecosystem has achieved enterprise scale. Over 70 chaotic core modules have been surgically decoupled into isolated domains (`/src/core_ai/`, `/src/blue_swarm/`, `/src/crypto/`, `/src/memory_systems/`, etc.), proving zero `MODULE_NOT_FOUND` exceptions and pure scaling capability.
 
 ---
 
@@ -80,25 +85,27 @@ Bayezid is engineered to solve the "Big Three" SOC challenges: Alert Fatigue, Ve
 
 * **The ML Sniper V2 (Learned Encoder & Live Quantization):** Upgraded from the legacy Isolation Forest, V2 uses a Byte-Level Transformer Encoder. It detects Zero-Day anomalies by analyzing statistical deviations across multiple dimensions, with hyper-fast vectorization.
 
-* **The Warden Sandbox (Kubernetes Cloud-Native):** When the ML Sniper detects a statistical anomaly (Zero-Day), Bayezid doesn't guess. It orchestrates an **Ephemeral Pod within a Kubernetes Cluster** (`runWardenSandbox`) using `@kubernetes/client-node`. It dynamically executes the payload in a Zero-Egress isolated environment with sub-second boot times (`imagePullPolicy: 'IfNotPresent'`) and safely extracts behavioral logs for AI evaluation.
+* **The Warden Sandbox (Kubernetes Cloud-Native):** When the ML Sniper detects a statistical anomaly (Zero-Day), Bayezid doesn't guess. It orchestrates an **Ephemeral Pod within a Kubernetes Cluster** (`runWardenSandbox`). It dynamically executes the payload in a Zero-Egress isolated environment with sub-second boot times and safely extracts behavioral logs for AI evaluation.
 
-* **Encrypted Swarm Intelligence (Federated Learning):** Bayezid nodes (e.g., across different ministries or branches) share Zero-Day mathematical features (not raw sensitive payloads) with each other. Using differential privacy and **RSA-2048 asymmetric cryptography**, nodes verify the signature of incoming intel, instantly retraining the local ML model to immunize the entire network against a threat seen by only one node.
+* **Encrypted Swarm Intelligence (Federated Learning):** Bayezid nodes share Zero-Day mathematical features with each other. Using differential privacy and **RSA-2048 asymmetric cryptography**, nodes verify the signature of incoming intel, instantly retraining the local ML model to immunize the entire network.
 
-* **L3 OS Network Striker (Counter-Recon & Execution):** Operates at the network layer (Windows Firewall/eBPF) to instantly drop malicious IPs. Before execution, it performs **Active Fingerprinting** via Reverse OSINT and Nmap scans to document the attacker's ISP, location, and infrastructure for forensic reporting. Includes an autonomous TTL daemon that automatically expires blocks after 24 hours.
+* **L3 OS Network Striker (Counter-Recon & Execution):** Operates at the network layer (Windows Firewall/eBPF) to instantly drop malicious IPs. Before execution, it performs **Active Fingerprinting** via Reverse OSINT to document the attacker's ISP and infrastructure. Includes an autonomous TTL daemon that expires blocks after 24 hours.
 
 * **The Oracle Agent (Reverse Engineering):** A dedicated Local AI (Qwen/Ollama) agent that deobfuscates intercepted payloads and translates raw bash/execution logs from the Kubernetes sandbox into human-readable intent analysis for Forensic RCA reports.
 
-* **The Intelligence Feedback Loop (Continuous Self-Learning):** Bayezid corrects its own ML engine. If the Warden Sandbox deems a statistically anomalous payload as "Safe" (False Positive), Bayezid automatically sends a feedback signal to the Python microservice. The ML Sniper retrains itself instantly, ensuring zero redundant false positives.
+* **The Intelligence Feedback Loop (Continuous Self-Learning):** Bayezid corrects its own ML engine. If the Warden Sandbox deems a statistically anomalous payload as "Safe" (False Positive), Bayezid automatically sends a feedback signal to the Python microservice. The ML Sniper retrains itself instantly.
 
 * **The Alchemist Agent (Adaptive Exploit Mutation):** Radically transforms Red Team operations by executing a live fuzzing loop directly on the target OS via `smartExec`. If blocked, it ingests stderr/stdout, mutates the payload dynamically, and re-fires until initial access is secured.
 
 * **Closed-Loop Auto-Remediation (Red-to-Blue Bridge):** Bridges offensive discovery with defensive mitigation. Upon detecting a vulnerability, the Blue Team autonomously classifies the threat, synthesizes executable mitigation code, applies the patch, and summons the Red Team to mathematically verify the fix.
 
+* **The Overseer Wingman Suite:** A multi-layered autonomous self-correction hivemind. If a Red or Blue agent stalls or encounters repeated failures, the Wingman Overseer diagnoses the failure, injects targeted operational corrections directly into Redis, and seamlessly triggers LoRA micro-training loops for absolute evolutionary persistence.
+
 ---
 
 ## Architectural Pillars
 
-The system is built on a modular, event-driven architecture designed for high-throughput security telemetry, elite offensive simulations, and adaptive self-healing.
+The system is built on a strictly decoupled, domain-driven architecture designed for high-throughput security telemetry, elite offensive simulations, and adaptive self-healing.
 
 ### 1. The Blue Team Engine (Cognitive Defense)
 
@@ -126,44 +133,35 @@ When toggled to **RED MODE**, Bayezid activates a proactive, fully autonomous of
 
 ---
 
-## Service Breakdown (The Micro-Service Logic)
+## Service Breakdown (The Enterprise Architecture)
 
-| Service | Responsibility | Technology |
-| --- | --- | --- |
-| **`server.js`** | Central Orchestrator, Swarm Sync API, Mode Switcher | Node.js / Express |
-| **`aiService.js`** | Multi-Agent Logic, K8s Pod Orchestration (`runWardenSandbox`) | Gemini / Qwen / K8s Client |
-| **`ml_engine/main.py`** | The ML Sniper, Federated Learning receiver, Persistent Memory | Python / FastAPI / Scikit-Learn |
-| **`swarmCrypto.js`** | RSA-2048 key generation, Payload Signing, and Verification | Node.js Crypto |
-| **`kernelStriker.js`** | Autonomous L3 IP Blocking and TTL expiration daemon | OS Firewall Commands |
-| **`mnemonProbe.js`** | Advanced eBPF memory protections (mmap, ptrace) | Node.js / eBPF |
-| **`kineticFilter.js`** | ML Hash Caching, Deep Normalization, Flexible Regex | JavaScript |
-| **`oracleAgent.js`** | Payload deobfuscation and intent reverse-engineering | Local LLM |
-| **`threatGrapher.js`** | Generates dynamic Mermaid.js threat flowcharts for reports | JavaScript / Markdown |
-| **`oracleGNN.js`** | Graph Neural Network for enterprise topology & lateral movement prediction | JavaScript / GraphSAGE |
-| **`wargamingEngine.js`** | Autonomous GAN Arena & Hydra Broadcasting | Local LLM |
-| **`matrixShell.js`** | Generative Deception Shell (SSH/Telnet Emulation) | Node.js Net / LLM |
-| **`galileoEngine.js`** | Mathematical causal inference forensics (Do-Calculus SCM DAGs) | JavaScript |
-| **`shadowMirror.js`** | Digital twin generation and pre-flight exploit validation | Docker Compose / Node.js |
-| **`veritasProof.js`** | Cryptographic audit engine (288-byte zk-SNARKs) | Node.js Crypto |
-| **`federationSwarm.js`** | Differential privacy gradient aggregation for swarm ML | Node.js |
-| **`bayezidBrain.js`** | Live LoRA fine-tuning for continuous LLM specialization | Python / PEFT / SFTTrainer |
+| Domain | Service / File | Responsibility | Technology |
+| --- | --- | --- | --- |
+| **`api`** | `server.js` | Central Orchestrator, API Routes, Mode Switcher | Node.js / Express |
+| **`core_ai`** | `bayezidBrain.js` | The LLM Orchestrator & Live LoRA Fine-Tuning | Python / SFTTrainer / LLM |
+| **`core_ai`** | `aiService.js` | Multi-Agent Logic, K8s Pod Orchestration (`runWardenSandbox`) | Gemini / Qwen / K8s Client |
+| **`core_ai`** | `wingmanOverseer.js` | Autonomous self-correction, stall detection, and dynamic patching | Node.js / Redis |
+| **`intelligence`** | `telemetryHub.js` | High-velocity SQLite telemetry ingestion | SQLite3 |
+| **`intelligence`** | `intelligenceReports.js` | Multi-dimensional CTI, IR, and Forensics automated Markdown generation | Node.js / YARA |
+| **`blue_swarm`** | `kernelStriker.js` | Autonomous L3 IP Blocking and TTL expiration daemon | OS Firewall Commands |
+| **`blue_swarm`** | `oracleGNN.js` | Graph Neural Network for topology & lateral movement prediction | JavaScript / GraphSAGE |
+| **`red_swarm`** | `chimeraEngine.js` | Polymorphic lethality and in-memory execution | JS / LLVM-IR Mutation |
+| **`purple_engine`** | `purpleOrchestrator.js` | The Dungeon Master bridging offensive findings to defensive patches | Node.js / LLM |
+| **`memory_systems`** | `mnemonProbe.js` | Advanced eBPF memory protections (mmap, ptrace) | Node.js / eBPF |
+| **`network`** | `galileoEngine.js` | Mathematical causal inference forensics (Do-Calculus SCM DAGs) | JavaScript |
+| **`crypto`** | `veritasProof.js` | Cryptographic audit engine (288-byte zk-SNARKs) | Node.js Crypto / Circom |
+| **`crypto`** | `swarmCrypto.js` | RSA-2048 key generation, Payload Signing, and Verification | Node.js Crypto |
 
 ---
 
 ### Prerequisites
 
 * **Node.js:** v20.x or higher.
-
 * **Python:** v3.10 or higher.
-
 * **Kubernetes:** A running K8s cluster (Minikube or Docker Desktop with K8s enabled).
-
-* **Database:** PostgreSQL with the `pgvector` extension.
-
-* **Redis:** For Live-Stream Memory Bus.
-
+* **Database:** SQLite (Built-in via `sqlite3` driver) & PostgreSQL (with `pgvector` for legacy systems).
+* **Redis:** For Live-Stream Memory Bus and Wingman synchronization.
 * **Docker & Docker Compose:** For SHADOW-MIRROR Digital Twins.
-
 * **Local AI (Optional):** Ollama installed for the local fallback and Oracle engine (`qwen2.5-coder:7b`).
 
 ---
@@ -172,17 +170,17 @@ When toggled to **RED MODE**, Bayezid activates a proactive, fully autonomous of
 
 You can test the core AI capabilities via these bridge endpoints using Postman:
 
-**1. Kubernetes Sandbox Evasion Test (Dynamic Execution)**
+**1. Enterprise CTI Generation (Reporting Engine)**
+* `POST /api/v1/intelligence/generate`
+* Generates granular reports across `/reports/CTI_Intel/`, `/reports/Tier3_Forensics/`, etc.
+
+**2. Kubernetes Sandbox Evasion Test (Dynamic Execution)**
 * `POST /api/v1/bridge/report-vuln`
 * Body: `{ "vulnName": "K8s Evasion Test", "evidence": "echo 'Checking network...'; ping -c 3 8.8.8.8 || echo 'Network is isolated'; cat /etc/shadow 2>/dev/null; sleep 5", "spoofedIp": "192.168.1.155" }`
 
-**2. Cognitive Risk Analysis & Virtual Patch Synthesis**
+**3. Cognitive Risk Analysis & Virtual Patch Synthesis**
 * `POST /api/v1/bridge/analyze`
 * Body: `{ "vulnId": "<UUID>", "autonomyMode": "Sniper" }`
-
-**3. Post-Breach Root Cause Analysis (Forensic RCA)**
-* `POST /api/v1/bridge/rca`
-* Body: `{ "vulnId": "<UUID>" }`
 
 **4. Launch GAN Wargaming (Self-Evolution)**
 * `POST /api/v1/wargaming/start`
@@ -209,9 +207,6 @@ You can test the core AI capabilities via these bridge endpoints using Postman:
 **10. VERITAS Zero-Knowledge Audit Export**
 * `GET /api/v1/veritas/export`
 
-**11. BAYEZID-BRAIN LoRA Fine-Tuning**
-* `POST /api/v1/brain/train-lora`
-
 ---
 
 ## Environment Variables (.env)
@@ -219,9 +214,10 @@ You can test the core AI capabilities via these bridge endpoints using Postman:
 ```env
 PORT=3000
 
+# Legacy Vector Memory (Optional)
 DATABASE_URL="postgresql://<USER>:<PASSWORD>@<HOST>:<PORT>/<DATABASE>"
-DIRECT_URL="postgresql://<USER>:<PASSWORD>@<HOST>:<PORT>/<DATABASE>"
 
+# AI Orchestration Keys
 AI_MODE=CLOUD
 GEMINI_API_KEY="AIzaSy_YOUR_GEMINI_API_KEY_HERE"
 GOOGLE_API_KEY="AIzaSy_YOUR_GOOGLE_API_KEY_HERE"
@@ -229,19 +225,20 @@ GROQ_API_KEY="gsk_OUR_GROQ_API_KEY_HERE"
 LOCAL_MODEL_NAME="qwen2.5-coder:7b"
 OLLAMA_BASE_URL="http://localhost:11434"
 
+# Alerting
 TELEGRAM_BOT_TOKEN="YOUR_TELEGRAM_BOT_TOKEN_HERE"
 TELEGRAM_CHAT_ID="YOUR_TELEGRAM_CHAT_ID_HERE"
 
+# Cryptography
 ENCRYPTION_KEY="your_64_character_hex_string_here"
 ENCRYPTION_IV="your_32_character_hex_string_here"
 
+# Cyber Threat Intelligence APIs
 OTX_API_KEY="your_alienvault_otx_api_key_here"
-
 OPENCTI_URL="https://your-opencti-instance-url"
 OPENCTI_TOKEN="your_opencti_token_here"
 
 SLA_TIMEOUT_MINUTES=5
-
 SWARM_NODES="http://node2.agency.gov,http://node3.agency.gov"
 ```
 

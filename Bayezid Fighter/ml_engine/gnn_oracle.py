@@ -27,15 +27,15 @@ async def predict_lateral(req: Request):
     body = await req.json()
     if not body.get('nodes') or not body.get('edges'):
         return {"risk_scores": []}
-        
+
     x = torch.tensor(body['nodes'], dtype=torch.float)
     ei = torch.tensor(body['edges'], dtype=torch.long).t().contiguous()
     with torch.no_grad():
         risk_scores = model(x, ei).squeeze().tolist()
-        
+
     if isinstance(risk_scores, float):
         risk_scores = [risk_scores]
-        
+
     return {"risk_scores": risk_scores}
 
 if __name__ == "__main__":

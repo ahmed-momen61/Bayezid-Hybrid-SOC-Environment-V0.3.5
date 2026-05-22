@@ -5,3 +5,8 @@ bayezid_master.key
 .claude/
 verification_key.json
 sandbox/
+brain_training_data/*.jsonl
+
+/archive_legacy_tests/
+/reports/
+telemetry.db

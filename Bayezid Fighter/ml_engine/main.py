@@ -26,7 +26,6 @@ model_lock = threading.Lock()
 _retrain_lock = asyncio.Lock()
 _feedback_queue = []
 
-
 MODEL_NAME = "google/bert_uncased_L-4_H-256_A-4"
 tokenizer = None
 transformer_encoder = None
@@ -52,7 +51,6 @@ def generate_latent_vector(payload: str):
         outputs = transformer_encoder(**inputs)
     vector = outputs.last_hidden_state.mean(dim=1).squeeze().numpy()
     return vector
-
 
 class LSTMAutoencoder(nn.Module):
     """ Temporal LSTM Autoencoder for Multi-Stage APT Detection (256-dim) """
@@ -89,7 +87,6 @@ class ADWINThreshold:
             std = np.std(self.window)
             self.dynamic_threshold = mean + (self.sensitivity * std)
         return self.dynamic_threshold
-
 
 class EWC:
     """
@@ -153,7 +150,6 @@ class EWC:
                 loss += (self.fisher[name] * (param - self.params[name]) ** 2).sum()
         return self.importance * loss
 
-
 def extract_features(payload: str):
     """ Converts raw payloads into Temporal Sequences (batch, seq_len, 256) """
     parts = [p.strip() for p in payload.split(';') if p.strip()]
@@ -203,7 +199,7 @@ if os.environ.get("BAYEZID_ML_INIT") != "1":
             else:
                 ewc_module = EWC(model)
                 print(f"[🧬] EWC: Initialized fresh (no prior Fisher data).")
-                
+
             print(f"[⚡] Applying INT8 Dynamic Quantization for sub-2ms latency...")
             quantized_model = torch.quantization.quantize_dynamic(
                 model, {nn.LSTM, nn.Linear}, dtype=torch.qint8
@@ -245,12 +241,12 @@ if os.environ.get("BAYEZID_ML_INIT") != "1":
         torch.save(model.state_dict(), MODEL_FILE)
         joblib.dump(adwin, ADWIN_FILE)
         joblib.dump(ewc_module, EWC_FILE)
-        
+
         print(f"[⚡] Applying INT8 Dynamic Quantization for sub-2ms latency...")
         quantized_model = torch.quantization.quantize_dynamic(
             model, {nn.LSTM, nn.Linear}, dtype=torch.qint8
         )
-        
+
         print(f"[✔] Initial 256-Dim Temporal Model, ADWIN, and EWC SAVED.")
 
     if os.path.exists(MALICIOUS_FILE):
@@ -263,7 +259,6 @@ if os.environ.get("BAYEZID_ML_INIT") != "1":
             print(f"[☠️] Swarm Memory Loaded: {len(malicious_traffic)} Zero-Day signatures.")
     else:
         malicious_traffic = np.empty((0, FEATURE_DIM))
-
 
 @app.post("/api/v1/ml/predict")
 async def predict_anomaly(req: Request):
@@ -322,7 +317,6 @@ async def predict_anomaly(req: Request):
         }
     }
 
-
 @app.post("/api/v1/ml/feedback")
 async def update_model(req: Request):
     global model, adwin, optimizer, ewc_module
@@ -360,7 +354,7 @@ async def update_model(req: Request):
             joblib.dump(adwin, ADWIN_FILE)
             if ewc_module:
                 joblib.dump(ewc_module, EWC_FILE)
-            
+
         global quantized_model
         quantized_model = torch.quantization.quantize_dynamic(
             model, {nn.LSTM, nn.Linear}, dtype=torch.qint8
@@ -370,7 +364,6 @@ async def update_model(req: Request):
         return {"status": "success", "message": "LSTM, ADWIN & EWC updated. INT8 model re-quantized."}
 
     return {"status": "error", "message": "No payload"}
-
 
 @app.post("/api/v1/ml/swarm_feedback")
 async def swarm_update(req: Request):
@@ -385,7 +378,7 @@ async def _flush_retrain_batch():
     global model, adwin, ewc_module, malicious_traffic
     samples = _feedback_queue.copy()
     _feedback_queue.clear()
-    
+
     for payload in samples:
         if not payload: continue
         try:
@@ -400,7 +393,6 @@ async def _flush_retrain_batch():
     with model_lock:
         np.save(MALICIOUS_FILE, malicious_traffic)
     print(f"\n[🐝] SWARM ASSIMILATION: ML Sniper V2 memorized Zero-Day signature (256-dim) in batch.")
-
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="warning")

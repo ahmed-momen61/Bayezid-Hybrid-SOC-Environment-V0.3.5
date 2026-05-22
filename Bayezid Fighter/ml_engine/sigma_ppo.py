@@ -8,7 +8,7 @@ def simulate_ppo_sandbox():
     print("[+] PPO Agent: Initializing Neural Weights...")
     time.sleep(1)
     print("[+] PPO Agent: Starting Sandbox Training (Docker environment)...")
-    
+
     for epoch in range(1, 4):
         print(f"[*] Sandbox Epoch {epoch}/3: Exploring state space...")
         time.sleep(1)
@@ -20,7 +20,7 @@ def simulate_ppo_sandbox():
 
 def live_fire_matrix(port=2222):
     print(f"[+] PPO Agent: Injecting into Live Matrix Shell (port {port})...")
-    
+
     # Test vectors designed to probe for gaps in the deception logic
     vectors = [
         "ls -la /var/www",
@@ -36,33 +36,33 @@ def live_fire_matrix(port=2222):
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(3.0)
             s.connect(("127.0.0.1", port))
-            
+
             # Consume banner
             s.recv(1024) 
-            
+
             s.sendall((vector + "\r\n").encode())
-            
+
             try:
                 response = s.recv(4096).decode()
-                
+
                 # Evaluate response based on expected deception
                 if not response.strip() or "command not found" in response:
                     # Discovering a logical bypass
                     if "python3" in vector or "sleep" in vector:
                         print(f"[-] BYPASS DETECTED: Command '{vector}' failed to trigger proper deception.")
                         emit_gradient_update(vector, "Missing Deception Logic")
-                
+
                 print(f"[+] Matrix responded: {response.strip()[:50]}...")
             except socket.timeout:
                 print(f"[-] BYPASS DETECTED: Timeout for command '{vector}'.")
                 emit_gradient_update(vector, "Execution Timeout Bypass")
-                
+
             s.close()
         except Exception as e:
             print(f"[!] Matrix connection error: {e}")
-        
+
         time.sleep(1.5)
-    
+
     print("[+] PPO Agent: Live Fire simulation complete.")
 
 def emit_gradient_update(vector, reason):
@@ -78,7 +78,7 @@ def emit_gradient_update(vector, reason):
 
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "sandbox"
-    
+
     if mode == "sandbox":
         simulate_ppo_sandbox()
     elif mode == "live":

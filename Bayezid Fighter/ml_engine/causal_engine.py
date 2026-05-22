@@ -15,12 +15,12 @@ async def build_dag(req: Request):
     events = body.get('events', [])
     if not events:
         return {"edges": [], "nodes": []}
-        
+
     df = pd.DataFrame(events)
     # PC algorithm: constraint-based causal discovery
     pc = PC(data=df)
     dag = pc.estimate(ci_test='chi_square', significance_level=0.05)
-    
+
     edges = list(dag.edges())
     nodes = list(dag.nodes())
     return {"edges": edges, "nodes": nodes}
@@ -31,10 +31,10 @@ async def do_calc(req: Request):
     dag_edges = body.get('dag_edges', [])
     intervention = body.get('intervention', {})
     query_var = body.get('query_var')
-    
+
     if not dag_edges or not query_var or not intervention:
         return {"error": "Missing parameters"}
-        
+
     model = BayesianNetwork(dag_edges)
     ci = CausalInference(model)
     try:

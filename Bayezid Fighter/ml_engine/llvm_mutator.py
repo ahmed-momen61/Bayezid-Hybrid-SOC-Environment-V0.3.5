@@ -18,13 +18,13 @@ def compile_to_llvm_ir(python_code: str) -> str:
         cython_file = f.name
     c_file = cython_file.replace('.py', '.c')
     ir_file = cython_file.replace('.py', '.ll')
-    
+
     subprocess.run(['cython', '-3', cython_file, '-o', c_file], check=True)
     subprocess.run(['clang', '-S', '-emit-llvm', '-O1', c_file, '-o', ir_file], check=True)
-    
+
     with open(ir_file) as f:
         ir = f.read()
-        
+
     os.remove(cython_file)
     os.remove(c_file)
     os.remove(ir_file)
@@ -47,13 +47,13 @@ def compile_ir_to_elf(ir_code: str) -> bytes:
     with tempfile.NamedTemporaryFile(suffix='.ll', delete=False) as f:
         f.write(ir_code.encode())
         ir_file = f.name
-    
+
     obj_file = ir_file.replace('.ll', '.o')
     subprocess.run(['clang', '-c', ir_file, '-o', obj_file], check=True)
-    
+
     with open(obj_file, 'rb') as f:
         elf_bytes = f.read()
-        
+
     os.remove(ir_file)
     os.remove(obj_file)
     return elf_bytes
@@ -62,7 +62,7 @@ class ASTObfuscator(ast.NodeTransformer):
     def __init__(self, seed: int):
         self.rng = random.Random(seed)
         self.name_map = {}
-        
+
     def visit_Name(self, node):
         if isinstance(node.ctx, ast.Store) or isinstance(node.ctx, ast.Load):
             # Don't rename builtins/dunders
@@ -71,13 +71,13 @@ class ASTObfuscator(ast.NodeTransformer):
                     self.name_map[node.id] = f"_v{self.rng.randint(10000, 99999)}"
                 node.id = self.name_map[node.id]
         return self.generic_visit(node)
-        
+
     def visit_FunctionDef(self, node):
         if not node.name.startswith('__'):
             if node.name not in self.name_map:
                 self.name_map[node.name] = f"_f{self.rng.randint(10000, 99999)}"
             node.name = self.name_map[node.name]
-            
+
         # Inject dead code block inside function
         if self.rng.random() < 0.5:
             opaque_if = ast.If(
@@ -91,7 +91,7 @@ class ASTObfuscator(ast.NodeTransformer):
             )
             ast.copy_location(opaque_if, node)
             node.body.insert(0, opaque_if)
-            
+
         return self.generic_visit(node)
 
 def mutate_ast_fallback(python_code: str, seed: int) -> str:
@@ -107,9 +107,9 @@ async def llvm_mutate(req: Request):
     body = await req.json()
     payload = body.get('payload', '')
     seed = body.get('seed', int.from_bytes(os.urandom(4), 'big'))
-    
+
     is_windows = sys.platform == 'win32'
-    
+
     if is_windows:
         # Fallback to AST Mutation on Windows
         mutated_code = mutate_ast_fallback(payload, seed)
