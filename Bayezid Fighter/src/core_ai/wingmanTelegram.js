@@ -62,50 +62,52 @@ const setupCommands = (bot) => {
         );
     });
 
+    const dispatchAsync = async (ctx, prompt, sessionId) => {
+        let thinkingMsg;
+        try {
+            thinkingMsg = await ctx.reply("🤔 Thinking...");
+        } catch(e) { return; }
+        
+        Promise.resolve().then(async () => {
+            let response = '';
+            try {
+                const result = await processMessage(prompt, sessionId, null, 'telegram_operator');
+                response = result.finalResponse || response;
+            } catch (e) {
+                response = `⚠️ Error processing request: ${e.message}`;
+            }
+
+            if (!response || response.trim() === '') response = 'Processed request successfully, but no output generated.';
+
+            const chunks = splitMessage(response);
+            try {
+                await ctx.telegram.editMessageText(ctx.chat.id, thinkingMsg.message_id, undefined, chunks[0]);
+            } catch(e) {
+                await ctx.telegram.sendMessage(ctx.chat.id, chunks[0]);
+            }
+            for (let i = 1; i < chunks.length; i++) {
+                await ctx.telegram.sendMessage(ctx.chat.id, chunks[i]);
+            }
+        }).catch(e => console.error("[WINGMAN] Async dispatch error:", e.message));
+    };
+
     bot.command('status', async (ctx) => {
         const sessionId = `telegram_${ctx.chat.id}_status`;
-        let response = '';
-        try {
-            const result = await processMessage('Give me a quick system status summary', sessionId, (t) => response += t, 'telegram_operator');
-            response = result.finalResponse || response;
-        } catch (e) {
-            response = `⚠️ Error getting status: ${e.message}`;
-        }
-        for (const chunk of splitMessage(response)) {
-            await ctx.reply(chunk);
-        }
+        await dispatchAsync(ctx, 'Give me a quick system status summary', sessionId);
     });
 
     bot.command('alerts', async (ctx) => {
         const args = ctx.message.text.split(' ');
         const n = parseInt(args[1]) || 5;
         const sessionId = `telegram_${ctx.chat.id}_alerts`;
-        let response = '';
-        try {
-            const result = await processMessage(`Show me the last ${n} alerts with their severity and status`, sessionId, (t) => response += t, 'telegram_operator');
-            response = result.finalResponse || response;
-        } catch (e) {
-            response = `⚠️ Error: ${e.message}`;
-        }
-        for (const chunk of splitMessage(response)) {
-            await ctx.reply(chunk);
-        }
+        await dispatchAsync(ctx, `Show me the last ${n} alerts with their severity and status`, sessionId);
     });
 
     bot.command('supervise', async (ctx) => {
         const agent = ctx.message.text.split(' ').slice(1).join(' ');
         if (!agent) return ctx.reply('Usage: /supervise <agent_name_or_target_ip>');
         const sessionId = `telegram_${ctx.chat.id}_supervise`;
-        let response = '';
-        try {
-            const result = await processMessage(`Supervise agent/target ${agent} and show me its recent events`, sessionId, (t) => response += t, 'telegram_operator');
-            response = result.finalResponse || response;
-        } catch (e) {
-            response = `⚠️ Error: ${e.message}`;
-        }
-        for (const chunk of splitMessage(response)) {
-            await ctx.reply(chunk);
-        }
+        await dispatchAsync(ctx, `Supervise agent/target ${agent} and show me its recent events`, sessionId);
     });
 
     bot.command('block', async (ctx) => {
@@ -156,62 +158,24 @@ const setupCommands = (bot) => {
 
     bot.command('train', async (ctx) => {
         const sessionId = `telegram_${ctx.chat.id}_train`;
-        let response = '';
-        try {
-            const result = await processMessage('Force a LoRA training cycle now', sessionId, (t) => response += t, 'telegram_operator');
-            response = result.finalResponse || response;
-        } catch (e) {
-            response = `⚠️ Error: ${e.message}`;
-        }
-        await ctx.reply(response);
+        await dispatchAsync(ctx, 'Force a LoRA training cycle now', sessionId);
     });
 
     bot.command('lora_status', async (ctx) => {
         const sessionId = `telegram_${ctx.chat.id}_lora`;
-        let response = '';
-        try {
-            const result = await processMessage('What is the current LoRA training status and metrics?', sessionId, (t) => response += t, 'telegram_operator');
-            response = result.finalResponse || response;
-        } catch (e) {
-            response = `⚠️ Error: ${e.message}`;
-        }
-        for (const chunk of splitMessage(response)) {
-            await ctx.reply(chunk);
-        }
+        await dispatchAsync(ctx, 'What is the current LoRA training status and metrics?', sessionId);
     });
 
     bot.command('brief', async (ctx) => {
         const sessionId = `telegram_${ctx.chat.id}_brief`;
-        let response = '';
-        try {
-            const result = await processMessage('Give me a comprehensive system briefing covering health, alerts, active operations, LoRA status, and any recent notable events', sessionId, (t) => response += t, 'telegram_operator');
-            response = result.finalResponse || response;
-        } catch (e) {
-            response = `⚠️ Error: ${e.message}`;
-        }
-        for (const chunk of splitMessage(response)) {
-            await ctx.reply(chunk);
-        }
+        await dispatchAsync(ctx, 'Give me a comprehensive system briefing covering health, alerts, active operations, LoRA status, and any recent notable events', sessionId);
     });
 
     bot.on('text', async (ctx) => {
         const message = ctx.message.text;
         const chatId = ctx.chat.id.toString();
         const sessionId = `telegram_${chatId}_chat`;
-
-        await ctx.sendChatAction('typing');
-
-        let response = '';
-        try {
-            const result = await processMessage(message, sessionId, (t) => response += t, 'telegram_operator');
-            response = result.finalResponse || response;
-        } catch (e) {
-            response = `⚠️ Error processing your request: ${e.message}`;
-        }
-
-        for (const chunk of splitMessage(response || 'I processed your request but generated no output.')) {
-            await ctx.reply(chunk);
-        }
+        await dispatchAsync(ctx, message, sessionId);
     });
 
     bot.on('callback_query', async (ctx) => {

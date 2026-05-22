@@ -103,7 +103,7 @@ const startMatrixShell = (port = 2222) => {
                 console.log(`[📡] MATRIX -> ML SYNC: Streaming attacker intent to ML Sniper...`);
                 try {
                     const payloadContext = sessionHistory.join(';');
-                    const mlResponse = await axios.post('http://127.0.0.1:8000/api/v1/ml/predict', { sequence: payloadContext });
+                    const mlResponse = await axios.post('http://127.0.0.1:8000/api/v1/ml/predict', { sequence: payloadContext }, { timeout: 3000 });
                     if (mlResponse.data && mlResponse.data.is_malicious) {
                         console.log(`[☠️] ML SNIPER VERDICT: Malicious intent detected early (Score: ${mlResponse.data.confidence}%).`);
                         if (mlResponse.data.confidence > 90) {

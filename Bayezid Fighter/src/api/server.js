@@ -8,7 +8,7 @@ const dotenv = require('dotenv');
 dotenv.config();
 const { PrismaClient } = require('@prisma/client');
 const path = require('path');
-const { processTuningCommand, liveConfig } = require('./tuningService');
+const { processTuningCommand, liveConfig } = require('../core_ai/tuningService');
 const { smartExec, analyzeWithVertexAI, analyzeWithLocalModel, runScoutAgent, runBreacherAgent, runPhantomAgent, runChameleonAgent, runOverlordAgent, runScribeAgent, runActionAgent, bridgeRedToBlue, applyFixAndVerify, runStealthScribeAgent, runVetoAgent, runShadowRouterAgent, runForensicRCAAgent, executeAlchemistFuzzingLoop, runMirageAgent, runWardenSandbox, runZeroDayForgeAgent } = require('../core_ai/aiService');
 const { executePlaybook } = require('../cti/playbookService');
 const { enrichWithOSINT } = require('../cti/osintService');
@@ -20,8 +20,10 @@ const crypto = require('crypto');
 const itsmService = require('../cti/itsmService');
 const { analyzeLogFastLive, injectSwarmRule } = require('../blue_swarm/kineticFilter');
 const KernelStriker = require('../blue_swarm/kernelStriker');
-const WargamingEngine = require('./wargamingEngine');
+const WargamingEngine = require('../red_swarm/warGamesMARL');
 const { redisClient } = require('../memory_systems/memoryService');
+const { emitTelemetry } = require('../intelligence/telemetryHub');
+const { generateAllReports } = require('../intelligence/intelligenceReports');
 const swarmSubscriber = redisClient.duplicate();
 swarmSubscriber.connect().then(() => {
     swarmSubscriber.subscribe('bayezid_tactical_feed', (message) => {
@@ -132,7 +134,7 @@ app.post('/api/v2/auth/login', loginLimiter, async(req, res) => {
 
         const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '1h' });
 
-        
+
         const jti = crypto.randomUUID();
         await redisClient.set(`refresh:${user.id}:${jti}`, 'active', { EX: 86400 });
 
@@ -145,8 +147,8 @@ app.post('/api/v2/auth/login', loginLimiter, async(req, res) => {
 app.post('/api/v2/auth/rotate-key', async(req, res) => {
     try {
         const newKey = crypto.randomBytes(32).toString('hex');
-        
-        
+
+
         await prisma.systemConfig.upsert({
             where: { key: 'encryption_rotation_status' },
             update: { value: `Last rotated: ${new Date().toISOString()}` },
@@ -295,6 +297,10 @@ const handleSecurityAlert = async(req, res) => {
             data: { sourceIp: source_ip, targetServer: target_server, eventType: event_type, status: "NEW" }
         });
 
+        if (typeof emitTelemetry === 'function') {
+            emitTelemetry('TACTICAL', { event: event_type, node: target_server, details: evidence_payload });
+        }
+
         let vulnRecordId = null;
         try {
             if (req.body.vulnName) {
@@ -377,7 +383,7 @@ const handleSecurityAlert = async(req, res) => {
 
             if (kineticTriage && kineticTriage.action !== "DROP") {
                 console.log(`\n[🧬] WAKING KINETIC EVOLVER: Threat bypassed kinetic filter but caught by AI! Evolving new rule...`);
-                evolveKineticRules(evidence_payload).then(rule => { if(rule) dataHarvester.harvestRuleEvolution(rule, 1.0); }).catch(e => console.log("Evolver error:", e.message));
+                evolveKineticRules(evidence_payload).then(rule => { if (rule) dataHarvester.harvestRuleEvolution(rule, 1.0); }).catch(e => console.log("Evolver error:", e.message));
             }
 
             playbookResult = await executePlaybook(savedAlert.id, aiResponse, isJson ? req.body : { source_ip: final_ip });
@@ -411,6 +417,8 @@ const handleSecurityAlert = async(req, res) => {
                 console.log(`[⚠️] Forge Agent could not construct a valid payload for testing.`);
                 redTeamVerdict = "UNTESTED";
             }
+        }
+
         await saveIncidentToMemory(savedAlert.id, evidence_payload);
 
         return res.status(200).json({
@@ -437,6 +445,15 @@ const handleSecurityAlert = async(req, res) => {
 };
 
 app.post('/api/v1/alerts/ingest', ingestLimiter, handleSecurityAlert);
+
+app.post('/api/v1/reports/generate', enforceRoE, async (req, res) => {
+    try {
+        if (typeof generateAllReports === 'function') await generateAllReports();
+        res.json({ status: 'success', message: 'All multi-dimensional enterprise reports generated successfully in /reports/' });
+    } catch (error) {
+        res.status(500).json({ status: 'error', message: error.message });
+    }
+});
 
 
 
@@ -1045,7 +1062,7 @@ purpleNamespace.on('connection', (socket) => {
 app.post('/api/v1/wargaming/start', async(req, res) => {
     const { targetAsset } = req.body;
     console.log(`\n[🚀] API Trigger: Launching GAN Wargaming Arena manually...`);
-    WargamingEngine.runArenaSession(targetAsset || "Production DB & Web API").catch(e => console.log(`[⚠️] Wargaming Error: ${e.message}`));
+    WargamingEngine.runMARLSimulation(500).catch(e => console.log(`[⚠️] Wargaming Error: ${e.message}`));
     res.json({ status: "success", message: "GAN Wargaming started in the background. Check server console." });
 });
 
@@ -1079,6 +1096,16 @@ const startBayezidServer = () => {
             startMatrixShell(2222);
             startMatrixShell(8080);
             console.log(`[⚡] Bayezid Intelligence Matrix is LIVE and Lethal.`);
+        }
+
+        try {
+            const { startTelegramBot } = require('../core_ai/wingmanTelegram');
+            const { initializeEyes } = require('../core_ai/wingmanEyes');
+            
+            initializeEyes();
+            startTelegramBot();
+        } catch (e) {
+            console.log(`[⚠️] Wingman Telegram Bot failed to initialize: ${e.message}`);
         }
     });
 
@@ -1322,7 +1349,7 @@ app.post('/api/v1/sigma-live/start', async(req, res) => {
 app.post('/api/v1/kinetic-evolver/evolve', async(req, res) => {
     const { anomalyContext } = req.body;
     console.log(`\n[🧬] API Triggered: Starting Kinetic Evolver Genetic Algorithm...`);
-    evolveKineticRules(anomalyContext || 'Manual Trigger').then(rule => { if(rule) dataHarvester.harvestRuleEvolution(rule, 1.0); }).catch(e => {});
+    evolveKineticRules(anomalyContext || 'Manual Trigger').then(rule => { if (rule) dataHarvester.harvestRuleEvolution(rule, 1.0); }).catch(e => {});
     res.json({ status: "success", message: "Kinetic Evolver Genetic Algorithm initiated. Check server logs." });
 });
 
@@ -1442,7 +1469,7 @@ app.post('/api/v1/shadow-mirror/zero-fail', redOpsLimiter, enforceRoE, async(req
     console.log(`\n[🪞] API Triggered: SHADOW-MIRROR Zero-Fail Pipeline...`);
     try {
         const report = await shadowMirror.zeroFailPipeline(scoutTelemetry, payload, iterations || 10);
-        dataHarvester.harvestPreFlightResult({id: report.mirrorId, targetIp: scoutTelemetry.targetIp}, report);
+        dataHarvester.harvestPreFlightResult({ id: report.mirrorId, targetIp: scoutTelemetry.targetIp }, report);
         res.json({ status: 'success', message: `Pre-flight complete. Approved: ${report.approved}`, data: report });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -1485,14 +1512,14 @@ app.post('/api/v2/blue/predict-lateral', async(req, res) => {
     if (networkSnapshot && networkSnapshot.nodes) {
         oracleGNN.ingestTraffic(networkSnapshot.nodes.map(n => ({
             srcIp: n.ip,
-            dstIp: n.ip, 
+            dstIp: n.ip,
             services: n.services
         })));
     }
     console.log(`\n[🌐] API Triggered: BLUE TEAM GNN Lateral Prediction...`);
     await oracleGNN.propagate();
 
-    
+
     const highRiskNodes = [...oracleGNN.nodes.values()].filter(n => n.risk > 85 && !n.isolated);
     for (const node of highRiskNodes) {
         console.log(`[🛡️] Node ${node.ip} exceeds 85% lateral risk. Auto-isolating!`);
@@ -1507,11 +1534,11 @@ app.post('/api/v2/blue/causal-rca', async(req, res) => {
 
     console.log(`\n[🔭] API Triggered: BLUE TEAM Mathematical Causal RCA...`);
     try {
-        
+
         const mockIncidentData = [{ id: alertId, label: 'Alert Trigger', type: 'impact', timestamp: 'T0' }];
         const report = await generateDeterministicReport(mockIncidentData);
 
-        
+
         const block = veritasChain.recordDecision('CAUSAL_REPORT', report, { alertId });
         dataHarvester.harvestAuditDecision(block);
         res.json({ status: 'success', message: `Causal RCA generated. Veritas Block: ${block.index}`, data: report });
@@ -1531,7 +1558,7 @@ app.post('/api/v2/blue/pre-emptive-harden', async(req, res) => {
         nodesToHarden: [...oracleGNN.nodes.values()].filter(n => n.subnet === subnetCidr && n.risk > 50).map(n => n.ip),
         status: 'PENDING_OPERATOR_APPROVAL'
     };
-    
+
     res.json({ status: 'success', message: 'Hardening plan generated and sent to War Room.', data: plan });
 });
 
@@ -1651,7 +1678,7 @@ app.post('/api/v2/roe/issue', async(req, res) => {
                 expiresAt,
                 maxOperations: maxOperations || 20,
                 salt,
-                createdBy: 'ADMIN' 
+                createdBy: 'ADMIN'
             }
         });
 
@@ -1725,8 +1752,8 @@ app.get('/api/v2/roe/status/:roeTokenId', async(req, res) => {
 app.post('/api/v2/roe/operator-approve', async(req, res) => {
     const { actionId, payloadPreview, signature } = req.body;
 
-    
-    
+
+
 
     if (!signature) {
         return res.status(403).json({ error: 'MISSING_SIGNATURE', message: 'Operator cryptographic signature required for High-Risk action.' });
@@ -1768,7 +1795,7 @@ app.post('/api/v2/red/llvm-forge', redOpsLimiter, enforceRoE, async(req, res) =>
         console.log(`[🔥] Routing Forge payload to Warden Sandbox for safe validation...`);
         const sandboxResult = await runWardenSandbox(forgeResult.baseCode);
 
-        
+
         const evasionScore = Math.floor(Math.random() * 100);
 
         res.json({
@@ -1792,12 +1819,12 @@ app.post('/api/v2/red/stealth-lateral', redOpsLimiter, enforceRoE, async(req, re
 
     console.log(`\n[🥷] API Triggered: RED TEAM Stealth Lateral Movement...`);
     try {
-        
+
         const command = `crackmapexec smb ${toIp} -u Administrator -H <hash> --local-auth`;
         console.log(`[🥷] Executing stealth lateral command: ${command}`);
 
         const start = Date.now();
-        
+
         oracleGNN.ingestTraffic([{ srcIp: fromIp, dstIp: toIp, services: [protocol] }]);
         await oracleGNN.propagate();
 
@@ -1820,7 +1847,7 @@ app.post('/api/v2/red/stealth-lateral', redOpsLimiter, enforceRoE, async(req, re
 
 app.get('/api/v2/red/adversarial-coverage', async(req, res) => {
     console.log(`\n[📊] API Triggered: RED TEAM Adversarial Coverage Metrics...`);
-    
+
     const metrics = {
         lstm_evasion_rate: 0.82,
         sigma_rule_evasion_rate: 0.65,
@@ -1875,11 +1902,11 @@ app.post('/api/v2/mirror/blue-validation', async(req, res) => {
         const mirror = shadowMirror.activeMirrors.get(mirrorId);
         if (!mirror) throw new Error(`Mirror ${mirrorId} not found`);
 
-        
+
         const attacksRun = mirror.testResults ? mirror.testResults.length : 0;
         const ruleCount = (sigmaRules && sigmaRules.length) || 0;
 
-        
+
         const detectedCount = Math.floor(attacksRun * (0.6 + Math.random() * 0.35));
         const missedCount = attacksRun - detectedCount;
 
@@ -1936,8 +1963,8 @@ app.get('/api/v2/analytics/purple-scorecard', async(req, res) => {
     console.log(`\n[📊] API Triggered: Analytics Purple Scorecard...`);
     try {
         const metrics = {
-            meanTimeToDetect: 45, 
-            meanTimeToRespond: 320, 
+            meanTimeToDetect: 45,
+            meanTimeToRespond: 320,
             detectionCoverage: 0.88,
             falsePositiveRate: 0.04,
             evasionSuccessRate: 0.12,
@@ -1955,10 +1982,10 @@ app.post('/api/v2/socket/operator-approve', async(req, res) => {
 
     console.log(`\n[🛡️] OPERATOR APPROVAL RECEIVED for op: ${operationId}`);
     try {
-        
+
         const jwt = require('jsonwebtoken');
         const decoded = jwt.verify(approvalJWT, JWT_SECRET);
-        
+
         let veritasBlockIndex = null;
         if (veritasChain) {
             const block = veritasChain.recordDecision('OPERATOR_APPROVAL', { operationId, approver: decoded.userId }, 'Operator Approval Gate');
@@ -1966,7 +1993,7 @@ app.post('/api/v2/socket/operator-approve', async(req, res) => {
             veritasBlockIndex = veritasChain.chain.length - 1;
         }
 
-        
+
         purpleNamespace.emit('operation_approved', { operationId, approvedBy: decoded.userId });
 
         res.json({ status: 'success', message: 'Operation Approved.', data: { approved: true, veritasBlock: veritasBlockIndex } });
@@ -2018,7 +2045,7 @@ app.get('/api/v2/veritas/export-compliance/:format', async(req, res) => {
     console.log(`\n[🔐] API Triggered: VERITAS V2 Compliance Export (${format.toUpperCase()})...`);
     try {
         const chainData = veritasChain.exportAuditReport('json');
-        
+
         let complianceMapping = {};
         if (format === 'soc2') complianceMapping = { "CC6.x": "Logical Access", "CC8.1": "Change Management" };
         if (format === 'iso27001') complianceMapping = { "A.12": "Operations Security", "A.14": "System Acquisition" };
@@ -2045,11 +2072,11 @@ app.get('/api/v2/brain/training-metrics', async(req, res) => {
     try {
         const stats = dataHarvester.getStats();
         const loraStats = loraManager.getStatus();
-        
+
         let improvementDelta = 0;
         let evalLoss = 0;
         let baseLoss = 0;
-        
+
         if (loraStats.trainingHistory.length > 0) {
             const lastRun = loraStats.trainingHistory[loraStats.trainingHistory.length - 1];
             if (lastRun.metrics) {
@@ -2084,7 +2111,7 @@ app.post('/api/v2/brain/force-train', redOpsLimiter, async(req, res) => {
             return res.status(400).json({ error: `Insufficient training samples. Need 50, currently have ${stats.totalSamples}.` });
         }
 
-        
+
         loraManager.trainLoRA(stats.datasetPath).catch(e => console.error(`[🧠] Training failed: ${e.message}`));
 
         res.json({
@@ -2101,13 +2128,13 @@ app.get('/api/v2/brain/data-quality', async(req, res) => {
     console.log(`\n[🧠] API Triggered: Fetching BRAIN Data Quality...`);
     try {
         const stats = dataHarvester.getStats();
-        
-        
+
+
         const total = stats.totalSamples;
         const dist = stats.sources || {};
-        
-        const recommendation = dist['red_team_operation'] < 20 ? 
-            "Harvest more [LATERAL_MOVEMENT / RED_TEAM] samples" : 
+
+        const recommendation = dist['red_team_operation'] < 20 ?
+            "Harvest more [LATERAL_MOVEMENT / RED_TEAM] samples" :
             "Data is reasonably balanced.";
 
         res.json({
@@ -2133,7 +2160,7 @@ process.on('SIGINT', () => {
 
 process.on('unhandledRejection', (reason, promise) => {
     if (reason && reason.code === 'ECONNREFUSED') {
-        
+
     } else {
         console.error('[-] Unhandled Rejection:', reason);
     }

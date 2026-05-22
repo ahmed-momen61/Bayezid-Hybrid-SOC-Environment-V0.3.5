@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { redisClient, getRecentAgentEvents, semanticAgentSearch, publishLiveEvent } = require('../memory_systems/memoryService');
-const { smartExec } = require('./aiService');
+
 const prisma = new PrismaClient();
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
@@ -164,6 +164,7 @@ const TOOL_REGISTRY = {
         execute: async ({ command }) => {
             if (!command) return 'Error: command is required.';
             try {
+                const { smartExec } = require('./aiService');
                 const result = await smartExec(command);
                 return `Command executed successfully.\nOutput: ${(result.stdout || '').substring(0, 2000)}${result.stderr ? '\nStderr: ' + result.stderr.substring(0, 500) : ''}`;
             } catch (e) {
@@ -557,7 +558,7 @@ const callLLM = async (messages, streamCallback) => {
             content: String(m.content || '')
         }));
         const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
-            model: 'llama3-70b-8192',
+            model: 'llama-3.3-70b-versatile',
             messages: groqMessages,
             temperature: 0.3
         }, {
@@ -582,6 +583,28 @@ const callLLM = async (messages, streamCallback) => {
         return response.data.message?.content || '';
     };
 
+    // --- 4. HEURISTIC FALLBACK (Pure Instinct) ---
+    const tryHeuristicFallback = async () => {
+        const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
+        const lowerText = lastUserMessage.toLowerCase();
+        
+        let responseText = "💀 The cloud is burning and the local AI is a potato right now. I'm operating on pure heuristic instinct. ";
+        
+        if (lowerText.includes('status')) {
+            const status = await TOOL_REGISTRY['get_system_status'].execute({ detail: 'summary' });
+            responseText += `Here is your system status since you can't check it yourself:\n\n${status}`;
+        } else if (lowerText.includes('alert')) {
+            const alerts = await TOOL_REGISTRY['list_active_alerts'].execute({ limit: 5 });
+            responseText += `Here are the latest alerts. Try not to panic:\n\n${alerts}`;
+        } else if (lowerText.includes('help')) {
+            responseText += `I can only give you 'status' or 'alerts' until the neural link is restored. Deal with it.`;
+        } else {
+            responseText += `I can't parse your garbage input without my neural network. Ask for 'status' or 'alerts' if you want something useful.`;
+        }
+        
+        return responseText;
+    };
+
     // --- WATERFALL EXECUTION ---
     try {
         const content = await tryGemini();
@@ -602,24 +625,38 @@ const callLLM = async (messages, streamCallback) => {
                 if (streamCallback) streamCallback(content);
                 return content;
             } catch (localError) {
-                const fallback = `💀 TOTAL INTELLIGENCE FAILURE.\nGemini: ${geminiError.message}\nGroq: ${groqError.message}\nLocal: ${localError.message}`;
-                if (streamCallback) streamCallback(fallback);
-                return fallback;
+                console.error(`[WINGMAN] FATAL AI CASCADE FAILURE:`);
+                console.error(`  - Gemini Error: ${geminiError.message}`);
+                console.error(`  - Groq Error: ${groqError.message}`);
+                console.error(`  - Local AI Error: ${localError.message}`);
+                
+                if (streamCallback) streamCallback(`\n[WINGMAN] Local AI failed. Activating Heuristic Instincts...`);
+                try {
+                    const fallbackContent = await tryHeuristicFallback();
+                    if (streamCallback) streamCallback(fallbackContent);
+                    return fallbackContent;
+                } catch (e) {
+                    const fallback = `💀 TOTAL INTELLIGENCE FAILURE.\nGemini: ${geminiError.message}\nGroq: ${groqError.message}\nLocal: ${localError.message}`;
+                    if (streamCallback) streamCallback(fallback);
+                    return fallback;
+                }
             }
         }
     }
 };
 
 const parseToolCall = (text) => {
-    const match = text.match(/<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/);
+    const match = text.match(/<tool_call>[\s\S]*?(\{[\s\S]*?\})[\s\S]*?<\/tool_call>/);
     if (!match) return null;
     try {
-        const parsed = JSON.parse(match[1]);
+        let jsonStr = match[1].replace(/```json/g, '').replace(/```/g, '').trim();
+        const parsed = JSON.parse(jsonStr);
         if (parsed.tool && TOOL_REGISTRY[parsed.tool]) {
             return { tool: parsed.tool, params: parsed.params || {} };
         }
         return null;
     } catch (e) {
+        console.error(`[WINGMAN] Tool parsing failed for payload: ${match[1]}`);
         return null;
     }
 };
@@ -704,7 +741,7 @@ const processMessage = async (userMessage, sessionId, streamCallback, userId = '
         });
         contextMessages.push({
             role: 'user',
-            content: `[TOOL_RESULT from ${toolCall.tool}]:\n${toolResult}`
+            content: `[SYSTEM NOTIFICATION] TOOL_OBSERVATION:\n${toolResult}`
         });
     }
 

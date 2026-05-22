@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { smartExec } = require('./aiService');
+
 const { publishLiveEvent } = require('../memory_systems/memoryService');
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
@@ -388,6 +388,7 @@ class LoRAManager {
         };
 
         try {
+            const { smartExec } = require('./aiService');
             console.log(`[🧠] Launching: py "${scriptPath}"`);
             const result = await smartExec(`py "${scriptPath}"`, 300000, true);
             trainingRecord.status = 'COMPLETED';
@@ -433,6 +434,7 @@ Always provide deterministic, actionable responses.
         console.log(`[🧠] Ollama Modelfile generated: ${modelfilePath}`);
 
         try {
+            const { smartExec } = require('./aiService');
             await smartExec(`ollama create ${modelName} -f "${modelfilePath}"`, 120000, true);
             this.activeAdapter = modelName;
             console.log(`[✔] Ollama model '${modelName}' created with LoRA adapter.`);

@@ -13,7 +13,8 @@ const queryMISP = async(indicator) => {
                 'Authorization': mispKey,
                 'Accept': 'application/json',
                 'Content-Type': 'application/json'
-            }
+            },
+            timeout: 10000
         });
         const attributes = (response.data && response.data.response) ? response.data.response.Attribute : null;
         if (attributes && attributes.length > 0) {
@@ -55,7 +56,8 @@ const queryOpenCTI = async(indicator) => {
             headers: {
                 'Authorization': `Bearer ${openCtiToken}`,
                 'Content-Type': 'application/json'
-            }
+            },
+            timeout: 10000
         });
         const edges = (response.data && response.data.data && response.data.data.stixCyberObservables) ?
             response.data.data.stixCyberObservables.edges :

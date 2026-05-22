@@ -39,7 +39,7 @@ const processTuningCommand = async(userCommand, userRole) => {
                 prompt: tuningPrompt + "\n\nCRITICAL: Return ONLY valid JSON.",
                 stream: false,
                 format: "json"
-            });
+            }, { timeout: 10000 });
             const plan = JSON.parse(localResponse.data.response);
             return await executePlan(plan);
         } catch (localError) {

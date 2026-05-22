@@ -186,11 +186,12 @@ const analyzeWithGroq = async (prompt, requireJson = false) => {
         payload.response_format = { type: 'json_object' };
     }
     try {
-        const response = await axios.post('https://api.com/openai/v1/chat/completions', payload, {
+        const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', payload, {
             headers: {
                 'Authorization': `Bearer ${ groqApiKey }`,
                 'Content-Type': 'application/json'
-            }
+            },
+            timeout: 10000
         });
         return response.data.choices[0].message.content;
     } catch (err) {
@@ -204,7 +205,7 @@ const chatWithLocalModelFast = async prompt => {
             model: process.env.LOCAL_MODEL_NAME || 'qwen2.5-coder:7b',
             prompt: prompt,
             stream: false
-        });
+        }, { timeout: 10000 });
         return localResponse.data.response;
     } catch (error) {
         throw new Error(`Local AI Fast Chat Error: ${ error.message }`);
@@ -319,7 +320,7 @@ const analyzeWithLocalModel = async alertData => {
             model: 'qwen2.5-coder:7b',
             prompt: detectivePrompt,
             stream: false
-        });
+        }, { timeout: 10000 });
         const extractedFacts = detectiveResponse.data.response;
         console.log(`[✔] Detective Extracted Facts successfully.`);
         console.log(`\n[🎖️] Role 2 (Commander) is formulating the Strategic JSON Report...`);
@@ -366,7 +367,7 @@ const analyzeWithLocalModel = async alertData => {
             prompt: commanderPrompt,
             stream: false,
             format: 'json'
-        });
+        }, { timeout: 10000 });
         let localText = commanderResponse.data.response;
         localText = localText.replace(/```json/gi, '').replace(/```/gi, '').trim();
         let finalReport = JSON.parse(localText);
@@ -467,7 +468,7 @@ const askRedSwarmAI = async (prompt, requireJson = true, maxRetries = 3) => {
                 prompt: localPrompt,
                 stream: false,
                 format: requireJson ? 'json' : ''
-            });
+            }, { timeout: 5000 });
             aiResponseText = localResponse.data.response;
         } catch (localError) {
             console.error(`[❌] Local AI also failed. System is blind: ${ localError.message }`);

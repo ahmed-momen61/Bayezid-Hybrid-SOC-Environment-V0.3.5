@@ -57,7 +57,7 @@ const OracleReverser = {
                 model: 'qwen2.5-coder:7b',
                 prompt: `You are an expert reverse engineer. Analyze this malicious payload and explain its goal in ONE short sentence. Mention any specific tools, OS commands, or intent. Do not give mitigation advice. The payload is: "${clearTextPayload}"`,
                 stream: false
-            }, { timeout: 0 });
+            }, { timeout: 2000 });
             return {
                 obfuscation: obfuscationMethod,
                 clearText: clearTextPayload,

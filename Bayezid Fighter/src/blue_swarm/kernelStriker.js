@@ -81,7 +81,7 @@ const traceAttackerAsync = async(ip) => {
         return null;
     }
     console.log(`[🔍] COUNTER-RECON: Initiating Reverse OSINT on ${ip} (Running in background)...`);
-    const geoPromise = axios.get(`http://ip-api.com/json/${ip}?fields=status,country,city,isp,as,proxy`)
+    const geoPromise = axios.get(`http://ip-api.com/json/${ip}?fields=status,country,city,isp,as,proxy`, { timeout: 3000 })
         .then(res => res.data)
         .catch(() => ({ status: 'fail', error: 'GeoIP Failed' }));
     const nmapCommand = `nmap -Pn -F -T4 ${ip} | grep open || echo "No open ports found"`;

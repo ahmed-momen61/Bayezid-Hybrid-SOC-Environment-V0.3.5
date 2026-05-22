@@ -12,7 +12,8 @@ const enrichWithOSINT = async(ipAddress) => {
         const response = await axios.get(`${OTX_BASE_URL}/IPv4/${ipAddress}/general`, {
             headers: {
                 'X-OTX-API-KEY': OTX_API_KEY
-            }
+            },
+            timeout: 10000
         });
         const data = response.data;
         const pulseCount = data.pulse_info ? data.pulse_info.count : 0;
@@ -42,7 +43,8 @@ const analyzeHash = async(fileHash) => {
         const response = await axios.get(`${OTX_BASE_URL}/file/${fileHash}/general`, {
             headers: {
                 'X-OTX-API-KEY': OTX_API_KEY
-            }
+            },
+            timeout: 10000
         });
         return {
             success: true,
