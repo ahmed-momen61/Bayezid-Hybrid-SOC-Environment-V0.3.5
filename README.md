@@ -8,6 +8,7 @@
 ![Node.js](https://img.shields.io/badge/Node.js-20.x-green.svg)
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
 ![SQLite](https://img.shields.io/badge/Telemetry-SQLite3-white.svg)
+![React](https://img.shields.io/badge/Frontend-React_Vite-cyan.svg)
 ![AI-Powered](https://img.shields.io/badge/AI-Cognitive_Multi_Agent-orange.svg)
 ![ML](https://img.shields.io/badge/ML-Isolation_Forest-yellow.svg)
 ![Vector-DB](https://img.shields.io/badge/Memory-pgvector-purple.svg)
@@ -59,6 +60,8 @@ The platform has been heavily augmented with highly advanced evolutionary phases
 
 ### Phase 5: Enterprise Reporting & Hyper-Optimized Telemetry
 
+* **Modern React Dashboard (Intelligence Hub)**: Added a cutting-edge React (Vite/Tailwind) frontend featuring real-time Live Alerts, Causal DAG visualizers, Purple Scorecards, and Wingman AI chat. This radically reduces operator cognitive load via beautiful, dark-themed visualizations powered by standard API endpoints.
+
 * **High-Velocity SQLite Engine**: The core telemetry hub has migrated to a hyper-optimized SQLite database (`telemetry.db`), eradicating network latency and capturing thousands of discrete Red/Blue/Purple swarm events with mathematical precision.
 
 * **Multi-Dimensional CTI Reporting**: Fully automated, endpoint-routed Cyber Threat Intelligence. Bayezid generates deep Markdown reports directly into categorized endpoints (`/reports/CTI_Intel`, `/reports/DevSecOps_Patching`, `/reports/IR_Tier1_Alerts`, `/reports/Tier3_Forensics`), armed with YARA rules, Pseudo-CVEs, and exact chronological SQL unions.
@@ -71,7 +74,7 @@ The platform has been heavily augmented with highly advanced evolutionary phases
 
 Bayezid is engineered to solve the "Big Three" SOC challenges: Alert Fatigue, Vendor Lock-in, and Cognitive Overhead, while introducing state-of-the-art offensive capabilities, autonomous remediation, and a globally connected **Self-Learning Architecture**.
 
-* **AI Waterfall Orchestration (RedSwarm Core):** A resilient triple-tier AI logic. Requests route through **Gemini 1.5/2.0**, fall back to **Groq LPU** for speed, and finally to **Local Qwen 2.5** for uncensored or offline operations.
+* **AI Waterfall Orchestration (RedSwarm Core):** A resilient triple-tier AI logic. Requests route through **Gemini 1.5/2.0**, fall back to **Local Qwen 2.5 (7B parameter primary)**, and finally feature a built-in memory-exhaustion failover to **Local Qwen 2.5 (1.5B parameter)** to guarantee execution on resource-constrained host machines.
 
 * **The Matrix Shell (Generative Deception):** Instead of simple blocking, Bayezid traps attackers in an LLM-driven virtual environment (Ports 2222/8080). The AI simulates a full Linux OS to study attacker TTPs in isolation.
 
@@ -138,6 +141,7 @@ When toggled to **RED MODE**, Bayezid activates a proactive, fully autonomous of
 | Domain | Service / File | Responsibility | Technology |
 | --- | --- | --- | --- |
 | **`api`** | `server.js` | Central Orchestrator, API Routes, Mode Switcher | Node.js / Express |
+| **`bayezid-frontend`** | `app/` | Real-time React intelligence dashboard | React / Vite / Tailwind |
 | **`core_ai`** | `bayezidBrain.js` | The LLM Orchestrator & Live LoRA Fine-Tuning | Python / SFTTrainer / LLM |
 | **`core_ai`** | `aiService.js` | Multi-Agent Logic, K8s Pod Orchestration (`runWardenSandbox`) | Gemini / Qwen / K8s Client |
 | **`core_ai`** | `wingmanOverseer.js` | Autonomous self-correction, stall detection, and dynamic patching | Node.js / Redis |
@@ -162,50 +166,59 @@ When toggled to **RED MODE**, Bayezid activates a proactive, fully autonomous of
 * **Database:** SQLite (Built-in via `sqlite3` driver) & PostgreSQL (with `pgvector` for legacy systems).
 * **Redis:** For Live-Stream Memory Bus and Wingman synchronization.
 * **Docker & Docker Compose:** For SHADOW-MIRROR Digital Twins.
-* **Local AI (Optional):** Ollama installed for the local fallback and Oracle engine (`qwen2.5-coder:7b`).
+* **Local AI (Optional):** Ollama installed for the local fallback and Oracle engine (`qwen2.5-coder:7b` & `qwen2.5-coder:1.5b`).
 
 ---
 
 ## API Documentation (Testing the Cognitive Capabilities)
 
-You can test the core AI capabilities via these bridge endpoints using Postman:
+You can test the core AI capabilities via these bridge endpoints using Postman. The server runs by default on `http://localhost:3000`. 
 
-**1. Enterprise CTI Generation (Reporting Engine)**
-* `POST /api/v1/intelligence/generate`
-* Generates granular reports across `/reports/CTI_Intel/`, `/reports/Tier3_Forensics/`, etc.
+*(Full endpoint suite available in `server.js` - here are the strategic highlights):*
 
-**2. Kubernetes Sandbox Evasion Test (Dynamic Execution)**
-* `POST /api/v1/bridge/report-vuln`
-* Body: `{ "vulnName": "K8s Evasion Test", "evidence": "echo 'Checking network...'; ping -c 3 8.8.8.8 || echo 'Network is isolated'; cat /etc/shadow 2>/dev/null; sleep 5", "spoofedIp": "192.168.1.155" }`
+**1. General & Frontend Telemetry**
+* `GET /api/v1/alerts` (Used by React Dashboard)
+* `POST /api/v1/alerts/ingest`
+* `GET /api/v2/blue/threat-heatmap`
+* `GET /api/v2/analytics/purple-scorecard`
+* `GET /api/v2/analytics/mitre-coverage`
 
-**3. Cognitive Risk Analysis & Virtual Patch Synthesis**
+**2. Cognitive Risk Analysis & Virtual Patch Synthesis**
 * `POST /api/v1/bridge/analyze`
 * Body: `{ "vulnId": "<UUID>", "autonomyMode": "Sniper" }`
 
-**4. Launch GAN Wargaming (Self-Evolution)**
+**3. Launch GAN Wargaming (Self-Evolution)**
 * `POST /api/v1/wargaming/start`
 * Body: `{ "targetAsset": "Production API" }`
 
-**5. Zero-Day Forge (Exploit Synthesis)**
-* `POST /api/v1/forge/generate`
+**4. Zero-Day Forge (Exploit Synthesis)**
+* `POST /api/v1/red/forge`
 * Body: `{ "vulnContext": "Outdated Apache Struts" }`
 
-**6. GALILEO-LIVE Mathematical Causal Forensics**
+**5. GALILEO-LIVE Mathematical Causal Forensics**
 * `POST /api/v1/forensic/galileo`
 * Body: `{ "incidentData": {...} }`
 
-**7. MNEMON eBPF Memory Probes Generation**
+**6. MNEMON eBPF Memory Probes Generation**
 * `POST /api/v1/mnemon/generate-probes`
 
-**8. ORACLE-G Pre-emptive Network Isolation**
+**7. ORACLE-G Pre-emptive Network Isolation**
 * `POST /api/v1/oracle-g/isolate`
 
-**9. SHADOW-MIRROR Digital Twin Zero-Fail Fuzzing**
+**8. SHADOW-MIRROR Digital Twin Zero-Fail Fuzzing**
 * `POST /api/v1/shadow-mirror/zero-fail`
 * Body: `{ "scoutTelemetry": {...}, "payload": "exploit_code" }`
 
-**10. VERITAS Zero-Knowledge Audit Export**
+**9. VERITAS Zero-Knowledge Audit Export**
 * `GET /api/v1/veritas/export`
+* `POST /api/v1/veritas/record`
+* `POST /api/v2/veritas/prove-operation`
+
+**10. Red Swarm Engagement**
+* `POST /api/v1/redswarm/engage`
+* `POST /api/v1/redswarm/scout`
+* `POST /api/v1/redswarm/breach`
+* `POST /api/v1/redswarm/auto-pilot`
 
 ---
 
