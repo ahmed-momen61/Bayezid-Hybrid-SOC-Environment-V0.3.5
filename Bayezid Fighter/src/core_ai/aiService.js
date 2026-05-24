@@ -205,10 +205,20 @@ const chatWithLocalModelFast = async prompt => {
             model: process.env.LOCAL_MODEL_NAME || 'qwen2.5-coder:7b',
             prompt: prompt,
             stream: false
-        }, { timeout: 10000 });
+        }, { timeout: 90000 });
         return localResponse.data.response;
     } catch (error) {
-        throw new Error(`Local AI Fast Chat Error: ${ error.message }`);
+        console.log(`[⚠️] Primary Local AI Failed. Switching to Lightweight Local Fallback...`);
+        try {
+            const fallbackResponse = await axios.post('http://localhost:11434/api/generate', {
+                model: 'qwen2.5-coder:1.5b',
+                prompt: prompt,
+                stream: false
+            }, { timeout: 90000 });
+            return fallbackResponse.data.response;
+        } catch (fallbackError) {
+            throw new Error(`Local AI Fast Chat Error (Both models failed): ${ error.message } | ${ fallbackError.message }`);
+        }
     }
 };
 const analyzeWithVertexAI = async alertData => {
@@ -316,12 +326,23 @@ const analyzeWithLocalModel = async alertData => {
         - File Hashes (MD5, SHA256) and Malicious Domains/URLs.
         - Specific processes, binaries, and privileges mentioned (e.g., SeDebugPrivilege).
         Be highly technical and precise.`;
-        const detectiveResponse = await axios.post('http://localhost:11434/api/generate', {
-            model: 'qwen2.5-coder:7b',
-            prompt: detectivePrompt,
-            stream: false
-        }, { timeout: 10000 });
-        const extractedFacts = detectiveResponse.data.response;
+        let extractedFacts = '';
+        try {
+            const detectiveResponse = await axios.post('http://localhost:11434/api/generate', {
+                model: process.env.LOCAL_MODEL_NAME || 'qwen2.5-coder:7b',
+                prompt: detectivePrompt,
+                stream: false
+            }, { timeout: 90000 });
+            extractedFacts = detectiveResponse.data.response;
+        } catch (detectivePrimaryErr) {
+            console.log(`[⚠️] Detective Primary Local AI Failed. Trying Lightweight Fallback...`);
+            const detectiveResponse = await axios.post('http://localhost:11434/api/generate', {
+                model: 'qwen2.5-coder:1.5b',
+                prompt: detectivePrompt,
+                stream: false
+            }, { timeout: 90000 });
+            extractedFacts = detectiveResponse.data.response;
+        }
         console.log(`[✔] Detective Extracted Facts successfully.`);
         console.log(`\n[🎖️] Role 2 (Commander) is formulating the Strategic JSON Report...`);
         const commanderPrompt = `You are an Elite Tier 3 Cybersecurity Incident Commander.
@@ -362,13 +383,25 @@ const analyzeWithLocalModel = async alertData => {
             "business_continuity_analysis": "Impact description.",
             "recommended_action": "1. Step one\\n2. Step two\\n3. Step three"
         }`;
-        const commanderResponse = await axios.post('http://localhost:11434/api/generate', {
-            model: 'qwen2.5-coder:7b',
-            prompt: commanderPrompt,
-            stream: false,
-            format: 'json'
-        }, { timeout: 10000 });
-        let localText = commanderResponse.data.response;
+        let localText = '';
+        try {
+            const commanderResponse = await axios.post('http://localhost:11434/api/generate', {
+                model: process.env.LOCAL_MODEL_NAME || 'qwen2.5-coder:7b',
+                prompt: commanderPrompt,
+                stream: false,
+                format: 'json'
+            }, { timeout: 90000 });
+            localText = commanderResponse.data.response;
+        } catch (commanderPrimaryErr) {
+            console.log(`[⚠️] Commander Primary Local AI Failed. Trying Lightweight Fallback...`);
+            const commanderResponse = await axios.post('http://localhost:11434/api/generate', {
+                model: 'qwen2.5-coder:1.5b',
+                prompt: commanderPrompt,
+                stream: false,
+                format: 'json'
+            }, { timeout: 90000 });
+            localText = commanderResponse.data.response;
+        }
         localText = localText.replace(/```json/gi, '').replace(/```/gi, '').trim();
         let finalReport = JSON.parse(localText);
         finalReport = deepSanitize(finalReport);
@@ -463,13 +496,24 @@ const askRedSwarmAI = async (prompt, requireJson = true, maxRetries = 3) => {
         console.log(`[🔄] Initiating Last Resort Fallback to Local AI (Ollama/Qwen)...`);
         try {
             const localPrompt = prompt + (requireJson ? '\n\nCRITICAL: Return ONLY a valid JSON object.' : '');
-            const localResponse = await axios.post('http://localhost:11434/api/generate', {
-                model: process.env.LOCAL_MODEL_NAME || 'qwen2.5-coder:7b',
-                prompt: localPrompt,
-                stream: false,
-                format: requireJson ? 'json' : ''
-            }, { timeout: 5000 });
-            aiResponseText = localResponse.data.response;
+            try {
+                const localResponse = await axios.post('http://localhost:11434/api/generate', {
+                    model: process.env.LOCAL_MODEL_NAME || 'qwen2.5-coder:7b',
+                    prompt: localPrompt,
+                    stream: false,
+                    format: requireJson ? 'json' : ''
+                }, { timeout: 5000 });
+                aiResponseText = localResponse.data.response;
+            } catch (localPrimaryErr) {
+                console.log(`[⚠️] Primary Local AI Failed. Switching to Lightweight Fallback...`);
+                const fallbackResponse = await axios.post('http://localhost:11434/api/generate', {
+                    model: 'qwen2.5-coder:1.5b',
+                    prompt: localPrompt,
+                    stream: false,
+                    format: requireJson ? 'json' : ''
+                }, { timeout: 5000 });
+                aiResponseText = fallbackResponse.data.response;
+            }
         } catch (localError) {
             console.error(`[❌] Local AI also failed. System is blind: ${ localError.message }`);
             throw new Error('All AI Engines failed.');
@@ -1515,6 +1559,7 @@ const runZeroDayForgeAgent = async (vulnContext, maxRetries = 3) => {
     2. Ensure perfect Python syntax and indentation.
     3. Do NOT include markdown explanations outside the code block.
     4. Return ONLY the raw python code inside \`\`\`python ... \`\`\` block.
+    5. CRITICAL: Avoid syntax errors with quotes (e.g. do not put single quotes inside single quotes like python -c '...['bash','-i']...'). Use double quotes where appropriate.
     `;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         console.log(`[⚒️] Forge Attempt ${ attempt }/${ maxRetries }: Generating Exploit Code via AI Waterfall (Gemini -> Groq -> Local)...`);

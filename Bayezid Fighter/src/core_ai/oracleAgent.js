@@ -51,13 +51,24 @@ const OracleReverser = {
             obfuscationMethod = 'Hex Encoded';
         }
         console.log(`[🔓] Oracle Verdict: Payload is [${obfuscationMethod}]. Clear text extracted: ${clearTextPayload.substring(0, 50)}...`);
+        const oraclePrompt = `You are an expert reverse engineer. Analyze this malicious payload and explain its goal in ONE short sentence. Mention any specific tools, OS commands, or intent. Do not give mitigation advice. The payload is: "${clearTextPayload}"`;
         try {
             console.log(`[🤖] Oracle querying Local AI (Ollama/Qwen) for intent analysis...`);
-            const response = await axios.post('http://localhost:11434/api/generate', {
-                model: 'qwen2.5-coder:7b',
-                prompt: `You are an expert reverse engineer. Analyze this malicious payload and explain its goal in ONE short sentence. Mention any specific tools, OS commands, or intent. Do not give mitigation advice. The payload is: "${clearTextPayload}"`,
-                stream: false
-            }, { timeout: 2000 });
+            let response;
+            try {
+                response = await axios.post('http://localhost:11434/api/generate', {
+                    model: process.env.LOCAL_MODEL_NAME || 'qwen2.5-coder:7b',
+                    prompt: oraclePrompt,
+                    stream: false
+                }, { timeout: 15000 });
+            } catch (oraclePrimaryErr) {
+                console.log(`[⚠️] Oracle Primary Local AI Failed. Trying Lightweight Fallback...`);
+                response = await axios.post('http://localhost:11434/api/generate', {
+                    model: 'qwen2.5-coder:1.5b',
+                    prompt: oraclePrompt,
+                    stream: false
+                }, { timeout: 15000 });
+            }
             return {
                 obfuscation: obfuscationMethod,
                 clearText: clearTextPayload,

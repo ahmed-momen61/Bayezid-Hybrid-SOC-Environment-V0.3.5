@@ -574,13 +574,24 @@ const callLLM = async (messages, streamCallback) => {
             role: m.role,
             content: String(m.content || '')
         }));
-        const response = await axios.post(`${OLLAMA_BASE_URL}/api/chat`, {
-            model: LOCAL_MODEL_NAME,
-            messages: sanitizedOllamaMessages,
-            stream: false,
-            options: { temperature: 0.3, num_predict: 2048 }
-        }, { timeout: 60000 });
-        return response.data.message?.content || '';
+        try {
+            const response = await axios.post(`${OLLAMA_BASE_URL}/api/chat`, {
+                model: LOCAL_MODEL_NAME,
+                messages: sanitizedOllamaMessages,
+                stream: false,
+                options: { temperature: 0.3, num_predict: 2048 }
+            }, { timeout: 90000 });
+            return response.data.message?.content || '';
+        } catch (localPrimaryErr) {
+            console.log(`[⚠️] Wingman Primary Local AI Failed. Trying Lightweight Fallback...`);
+            const fallbackResponse = await axios.post(`${OLLAMA_BASE_URL}/api/chat`, {
+                model: 'qwen2.5-coder:1.5b',
+                messages: sanitizedOllamaMessages,
+                stream: false,
+                options: { temperature: 0.3, num_predict: 2048 }
+            }, { timeout: 90000 });
+            return fallbackResponse.data.message?.content || '';
+        }
     };
 
     // --- 4. HEURISTIC FALLBACK (Pure Instinct) ---
@@ -646,17 +657,32 @@ const callLLM = async (messages, streamCallback) => {
 };
 
 const parseToolCall = (text) => {
-    const match = text.match(/<tool_call>[\s\S]*?(\{[\s\S]*?\})[\s\S]*?<\/tool_call>/);
+    const match = text.match(/<tool_call>([\s\S]*?)<\/tool_call>/);
     if (!match) return null;
+    let jsonStr = match[1].replace(/```json/gi, '').replace(/```/gi, '').trim();
     try {
-        let jsonStr = match[1].replace(/```json/g, '').replace(/```/g, '').trim();
         const parsed = JSON.parse(jsonStr);
         if (parsed.tool && TOOL_REGISTRY[parsed.tool]) {
             return { tool: parsed.tool, params: parsed.params || {} };
         }
         return null;
     } catch (e) {
-        console.error(`[WINGMAN] Tool parsing failed for payload: ${match[1]}`);
+        let openBraces = (jsonStr.match(/\{/g) || []).length;
+        let closeBraces = (jsonStr.match(/\}/g) || []).length;
+        if (openBraces > closeBraces) {
+            jsonStr += '}'.repeat(openBraces - closeBraces);
+            try {
+                const repaired = JSON.parse(jsonStr);
+                if (repaired.tool && TOOL_REGISTRY[repaired.tool]) {
+                    return { tool: repaired.tool, params: repaired.params || {} };
+                }
+            } catch (repairErr) {
+                console.error(`[WINGMAN] Tool parsing failed for payload (Even after repair): ${jsonStr}`);
+                return null;
+            }
+        } else {
+            console.error(`[WINGMAN] Tool parsing failed for payload: ${jsonStr}`);
+        }
         return null;
     }
 };
@@ -685,7 +711,7 @@ const buildToolList = () => {
 
 const MAX_TOOL_ITERATIONS = 5;
 
-const processMessage = async (userMessage, sessionId, streamCallback, userId = 'operator') => {
+const processMessage = async (userMessage, sessionId = require('crypto').randomUUID(), streamCallback, userId = 'operator') => {
 
     let session = await getSession(sessionId);
     let messages = session?.messages || [];
@@ -723,7 +749,13 @@ const processMessage = async (userMessage, sessionId, streamCallback, userId = '
             streamCallback(`⚙️ Executing: ${toolCall.tool}...\n`);
         }
 
-        const toolResult = await TOOL_REGISTRY[toolCall.tool].execute(toolCall.params);
+        let toolResult;
+        try {
+            toolResult = await TOOL_REGISTRY[toolCall.tool].execute(toolCall.params);
+        } catch (err) {
+            console.error(`[WINGMAN] Tool Execution Error (${toolCall.tool}):`, err.message);
+            toolResult = `ERROR: Tool execution failed with message: ${err.message}`;
+        }
 
         // Log tool call
         toolCallLog.push({

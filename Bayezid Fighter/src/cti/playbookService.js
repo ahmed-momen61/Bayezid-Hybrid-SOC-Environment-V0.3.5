@@ -47,16 +47,29 @@ const executePlaybook = async(alertId, aiAnalysis, payload) => {
             aiText = aiText.replace(/```json/gi, '').replace(/```/gi, '').trim();
             generatedCommands = JSON.parse(aiText);
         } catch (cloudErr) {
-            console.log(`[⚠️] Gemini Cloud Failed (Quota/Network). Switching to Local AI...`);
-            const aiCodeResponse = await axios.post('http://localhost:11434/api/generate', {
-                model: process.env.LOCAL_MODEL_NAME || 'qwen2.5-coder:7b',
-                prompt: codeGenPrompt,
-                stream: false,
-                format: 'json'
-            });
-            let localText = aiCodeResponse.data.response.trim();
-            localText = localText.replace(/```json/gi, '').replace(/```/gi, '').trim();
-            generatedCommands = JSON.parse(localText);
+            console.log(`[⚠️] Gemini Cloud Failed (Quota/Network). Switching to Primary Local AI...`);
+            try {
+                const aiCodeResponse = await axios.post('http://localhost:11434/api/generate', {
+                    model: process.env.LOCAL_MODEL_NAME || 'qwen2.5-coder:7b',
+                    prompt: codeGenPrompt,
+                    stream: false,
+                    format: 'json'
+                });
+                let localText = aiCodeResponse.data.response.trim();
+                localText = localText.replace(/```json/gi, '').replace(/```/gi, '').trim();
+                generatedCommands = JSON.parse(localText);
+            } catch (localPrimaryErr) {
+                console.log(`[⚠️] Primary Local AI Failed (OOM/Error). Switching to Lightweight Local Fallback (qwen2.5-coder:1.5b)...`);
+                const fallbackResponse = await axios.post('http://localhost:11434/api/generate', {
+                    model: 'qwen2.5-coder:1.5b',
+                    prompt: codeGenPrompt,
+                    stream: false,
+                    format: 'json'
+                });
+                let fallbackText = fallbackResponse.data.response.trim();
+                fallbackText = fallbackText.replace(/```json/gi, '').replace(/```/gi, '').trim();
+                generatedCommands = JSON.parse(fallbackText);
+            }
         }
         applyCommand = generatedCommands.apply_command;
         rollbackCommand = generatedCommands.rollback_command;

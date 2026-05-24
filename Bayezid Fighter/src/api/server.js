@@ -179,7 +179,7 @@ const { Server } = require('socket.io');
 const httpServer = http.createServer(app);
 const io = new Server(httpServer, {
     cors: {
-        origin: "http://localhost:5173",
+        origin: ["http://localhost:5173", "http://localhost:5174", "http://localhost:5175"],
         methods: ["GET", "POST"]
     }
 });
@@ -421,8 +421,27 @@ const handleSecurityAlert = async(req, res) => {
 
         await saveIncidentToMemory(savedAlert.id, evidence_payload);
 
+        // Emit the alert to all connected Socket.io clients
+        if (global.io) {
+            const formattedAlert = {
+                id: savedAlert.id,
+                sourceIp: final_ip,
+                targetServer: target_server,
+                eventType: event_type,
+                severity: (wardenReport && wardenReport.isMalicious) ? 'CRITICAL' : aiResponse.severity,
+                threatType: aiResponse.threat_type,
+                recommendedAction: aiResponse.recommended_action,
+                confidenceType: aiResponse.confidence_type,
+                status: alertStatus,
+                osintData: JSON.stringify({ osint: osintData, cti: ctiData }),
+                createdAt: savedAlert.createdAt || new Date().toISOString()
+            };
+            global.io.emit('new_alert', formattedAlert);
+        }
+
         return res.status(200).json({
             status: 'success',
+            alert_id: savedAlert.id,
             ticket_id: ticketId,
             vulnId: vulnRecordId,
             is_false_positive: aiResponse.is_false_positive,

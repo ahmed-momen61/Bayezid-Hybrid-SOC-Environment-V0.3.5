@@ -34,14 +34,28 @@ const processTuningCommand = async(userCommand, userRole) => {
     } catch (cloudError) {
         console.warn(`\n[⚠️] Cloud Tuning Failed (Quota/Network). Switching to Local AI...`);
         try {
+            let localText = '';
+        try {
             const localResponse = await axios.post('http://localhost:11434/api/generate', {
-                model: process.env.LOCAL_MODEL_NAME || "qwen2.5-coder:7b",
-                prompt: tuningPrompt + "\n\nCRITICAL: Return ONLY valid JSON.",
+                model: process.env.LOCAL_MODEL_NAME || 'qwen2.5-coder:7b',
+                prompt: tuningPrompt,
                 stream: false,
-                format: "json"
-            }, { timeout: 10000 });
-            const plan = JSON.parse(localResponse.data.response);
-            return await executePlan(plan);
+                format: 'json'
+            }, { timeout: 60000 });
+            localText = localResponse.data.response;
+        } catch (tuningPrimaryErr) {
+            console.log(`[⚠️] Tuning Primary Local AI Failed. Trying Lightweight Fallback...`);
+            const fallbackResponse = await axios.post('http://localhost:11434/api/generate', {
+                model: 'qwen2.5-coder:1.5b',
+                prompt: tuningPrompt,
+                stream: false,
+                format: 'json'
+            }, { timeout: 60000 });
+            localText = fallbackResponse.data.response;
+        }
+        localText = localText.replace(/```json/gi, '').replace(/```/gi, '').trim();
+        const plan = JSON.parse(localText);
+        return await executePlan(plan);
         } catch (localError) {
             console.error(`[❌] Total System Blindness: Both AI engines failed.`);
             return { action: "ERROR", reply: "The system is currently unable to achieve any artificial intelligence." };
