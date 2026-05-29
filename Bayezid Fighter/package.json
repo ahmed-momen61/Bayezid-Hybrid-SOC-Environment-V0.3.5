@@ -14,6 +14,10 @@
         "@google/generative-ai": "^0.24.1",
         "@kubernetes/client-node": "^1.4.0",
         "@prisma/client": "^6.19.2",
+        "@temporalio/activity": "^1.17.2",
+        "@temporalio/client": "^1.17.2",
+        "@temporalio/worker": "^1.17.2",
+        "@temporalio/workflow": "^1.17.2",
         "@tensorflow/tfjs": "^4.22.0",
         "acorn": "^8.16.0",
         "acorn-walk": "^8.3.5",
@@ -37,7 +41,9 @@
         "socket.io": "^4.8.3",
         "sqlite3": "^6.0.1",
         "strip-comments": "^2.0.1",
-        "telegraf": "^4.16.3"
+        "telegraf": "^4.16.3",
+        "ts-node": "^10.9.2",
+        "typescript": "^6.0.3"
     },
     "devDependencies": {
         "prisma": "^6.19.3"

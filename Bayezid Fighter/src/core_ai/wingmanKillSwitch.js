@@ -1,19 +1,16 @@
 const { execSync } = require('child_process');
 const os = require('os');
-
 const activateKillSwitch = () => {
     console.error('\n[☠️] ========================================== [☠️]');
     console.error('[☠️] CRITICAL ALERT: SYSTEM KILL SWITCH ACTIVATED');
     console.error('[☠️] REASON: UNEXPECTED SWARM BEHAVIOR OR ROE VIOLATION');
     console.error('[☠️] ========================================== [☠️]\n');
-
     try {
         console.error('[☠️] Flushing Redis Memory Buffers...');
         execSync('redis-cli flushall', { stdio: 'ignore' });
     } catch (e) {
         console.error('[⚠️] Failed to flush Redis.');
     }
-
     try {
         if (os.platform() === 'linux') {
             console.error('[☠️] Detaching eBPF GUILLOTINE Probes...');
@@ -25,7 +22,6 @@ const activateKillSwitch = () => {
     } catch (e) {
         console.error('[⚠️] Failed to detach eBPF probes.');
     }
-
     try {
         console.error('[☠️] Engaging Telegram Emergency Alert...');
         const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -37,9 +33,7 @@ const activateKillSwitch = () => {
     } catch (e) {
         console.error('[⚠️] Failed to send Telegram alert.');
     }
-
     console.error('[☠️] Terminating Process Group (SIGKILL). Goodbye.');
     process.kill(-process.pid, 'SIGKILL');
 };
-
 module.exports = { activateKillSwitch };

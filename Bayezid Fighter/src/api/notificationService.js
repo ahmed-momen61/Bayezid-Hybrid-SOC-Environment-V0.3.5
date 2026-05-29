@@ -1,24 +1,17 @@
-
 const axios = require('axios');
-
 const sendTelegramAlert = async (alertData, osintData) => {
-
     try {
         const { sendEnhancedAlert } = require('../core_ai/wingmanTelegram');
         await sendEnhancedAlert(alertData, osintData);
         return;
     } catch (e) {
-
     }
-
     const token = process.env.TELEGRAM_BOT_TOKEN;
     const chatId = process.env.TELEGRAM_CHAT_ID;
-
     if (!token || !chatId) {
         console.log('[!] Telegram credentials missing. Skipping Mobile SOC alert.');
         return;
     }
-
     const message = `
 🚨 <b>BAYEZID SOC ALERT</b> 🚨
 ━━━━━━━━━━━━━━━━━━━━
@@ -28,18 +21,14 @@ const sendTelegramAlert = async (alertData, osintData) => {
 🌍 <b>Origin:</b> ${osintData ? osintData.country : 'Unknown'}
 📊 <b>CVSS Score:</b> ${alertData.cvss_score}
 🤖 <b>AI Confidence:</b> ${alertData.confidence_score}
-
 📝 <b>AI Forensic Report:</b>
 <i>${alertData.detailed_report}</i>
-
 🛡️ <b>Recommended Action:</b>
 ${alertData.recommended_action}
 ━━━━━━━━━━━━━━━━━━━━
 ⚙️ <i>Engine: ${alertData.engine_used}</i>
     `;
-
     const url = `https://api.telegram.org/bot${token}/sendMessage`;
-
     try {
         await axios.post(url, {
             chat_id: chatId,
@@ -59,5 +48,4 @@ ${alertData.recommended_action}
         console.error('[-] Failed to send Telegram alert:', error.message);
     }
 };
-
 module.exports = { sendTelegramAlert };

@@ -1,11 +1,8 @@
-
 const { PrismaClient } = require('@prisma/client');
 const axios = require('axios');
 const { redisClient, getRecentAgentEvents } = require('../memory_systems/memoryService');
 const prisma = new PrismaClient();
-
 const ML_ENGINE_URL = process.env.ML_ENGINE_URL || 'http://localhost:8000';
-
 const liveSystemState = {
     snapshot_time: null,
     system_health: {
@@ -35,7 +32,6 @@ const liveSystemState = {
         top_blocked_ip: null
     }
 };
-
 const translateEvent = (channel, event) => {
     const translators = {
         'NEW_THREAT_EMBEDDED': (d) => `🔴 New threat alert #${d.alertId} has been ingested and embedded into semantic memory.`,
@@ -49,43 +45,35 @@ const translateEvent = (channel, event) => {
         'WINGMAN_INTERACTION': (d) => `🦾 Wingman processed request (tools: ${(d.toolsUsed || []).join(', ') || 'none'}).`,
         'AGENT_CORRECTION': (d) => `🔧 Wingman injected correction for ${d.agent}: "${(d.correction || '').substring(0, 100)}"`
     };
-
     const fn = translators[event.type];
     const translated = fn ? fn(event.data || {}) : `[${channel}] ${event.type}: ${JSON.stringify(event.data || {}).substring(0, 200)}`;
     return { text: translated, timestamp: event.timestamp || Date.now(), type: event.type };
 };
-
 let eyesSubscriber = null;
-
 const CHANNELS = [
     'bayezid_tactical_feed',
     'bayezid_redswarm_events',
     'bayezid_blue_events',
     'bayezid_system_health'
 ];
-
 const startRedisSubscriber = async () => {
     if (!redisClient.isOpen) {
         console.log('[👁️] Wingman Eyes: Redis not available, running in degraded mode.');
         liveSystemState.system_health.redis = 'OFFLINE';
         return;
     }
-
     try {
         eyesSubscriber = redisClient.duplicate();
         await eyesSubscriber.connect();
-
         for (const channel of CHANNELS) {
             await eyesSubscriber.subscribe(channel, (message) => {
                 try {
                     const event = JSON.parse(message);
                     const translated = translateEvent(channel, event);
                     liveSystemState.recent_events.unshift(translated);
-
                     if (liveSystemState.recent_events.length > 50) {
                         liveSystemState.recent_events = liveSystemState.recent_events.slice(0, 50);
                     }
-
                     if (event.type === 'KINETIC_BLOCK') {
                         liveSystemState.kinetic_blocks.last_hour++;
                         liveSystemState.kinetic_blocks.top_blocked_ip = event.data?.ip;
@@ -100,7 +88,6 @@ const startRedisSubscriber = async () => {
                 } catch (e) {  }
             });
         }
-
         liveSystemState.system_health.redis = 'ONLINE';
         console.log(`[👁️] Wingman Eyes: Subscribed to ${CHANNELS.length} Redis channels.`);
     } catch (e) {
@@ -108,53 +95,41 @@ const startRedisSubscriber = async () => {
         console.log(`[👁️] Wingman Eyes: Redis subscription failed: ${e.message}`);
     }
 };
-
 let pollInterval = null;
-
 const pollSystemHealth = async () => {
     liveSystemState.snapshot_time = new Date().toISOString();
     liveSystemState.system_health.backend = 'ONLINE';
-
     try {
         const alertCounts = await prisma.alert.groupBy({
             by: ['status'],
             _count: true
         });
-
         const severityCounts = await prisma.alert.groupBy({
             by: ['severity'],
             where: { status: { not: 'RESOLVED' } },
             _count: true
         });
-
         liveSystemState.alerts.total_open = alertCounts
             .filter(a => a.status !== 'RESOLVED')
             .reduce((sum, a) => sum + a._count, 0);
-
         liveSystemState.alerts.critical = severityCounts
             .find(s => s.severity === 'CRITICAL')?._count || 0;
-
         liveSystemState.alerts.high = severityCounts
             .find(s => s.severity === 'HIGH')?._count || 0;
-
         liveSystemState.alerts.pending_review = alertCounts
             .find(a => a.status === 'PENDING_REVIEW')?._count || 0;
-
         liveSystemState.alerts.patch_failed = alertCounts
             .find(a => a.status === 'PATCH_FAILED')?._count || 0;
-
         liveSystemState.system_health.database = 'ONLINE';
     } catch (e) {
         liveSystemState.system_health.database = 'DEGRADED';
     }
-
     try {
         const mlResp = await axios.get(`${ML_ENGINE_URL}/health`, { timeout: 3000 });
         liveSystemState.system_health.ml_engine = mlResp.status === 200 ? 'ONLINE' : 'DEGRADED';
     } catch (e) {
         liveSystemState.system_health.ml_engine = 'OFFLINE';
     }
-
     try {
         if (redisClient.isOpen) {
             await redisClient.ping();
@@ -165,45 +140,35 @@ const pollSystemHealth = async () => {
     } catch (e) {
         liveSystemState.system_health.redis = 'DEGRADED';
     }
-
     try {
         const { dataHarvester } = require('./bayezidBrain');
         const stats = dataHarvester.getStats();
         liveSystemState.lora_training.datasetSize = stats.totalSamples;
     } catch (e) {  }
-
     const now = new Date();
     if (now.getMinutes() === 0 && now.getSeconds() < 15) {
         liveSystemState.kinetic_blocks.last_hour = 0;
     }
-
     try {
         if (redisClient.isOpen) {
             await redisClient.set('wingman:system_state', JSON.stringify(liveSystemState), { EX: 30 });
         }
     } catch (e) {  }
 };
-
 const getPlainEnglishBriefing = (state) => {
     if (!state) state = liveSystemState;
-
     const health = state.system_health;
     const healthLine = `Backend: ${health.backend} | Redis: ${health.redis} | DB: ${health.database} | ML Engine: ${health.ml_engine}`;
-
     const alertLine = state.alerts.total_open > 0
         ? `We have ${state.alerts.total_open} open alerts: ${state.alerts.critical} CRITICAL, ${state.alerts.high} HIGH. ${state.alerts.patch_failed > 0 ? `⚠️ ${state.alerts.patch_failed} patches FAILED.` : ''}`
         : 'No open alerts. All quiet on the digital front.';
-
     const kineticLine = state.kinetic_blocks.last_hour > 0
         ? `KernelStriker blocked ${state.kinetic_blocks.last_hour} IPs this hour${state.kinetic_blocks.top_blocked_ip ? `, most recent: ${state.kinetic_blocks.top_blocked_ip}` : ''}.`
         : 'No IP blocks in the last hour.';
-
     const loraLine = `LoRA: ${state.lora_training.status} (${state.lora_training.datasetSize} samples)${state.lora_training.lastRun ? `, last run: ${state.lora_training.lastRun}` : ''}.`;
-
     const recentLine = state.recent_events.length > 0
         ? `Recent activity:\n${state.recent_events.slice(0, 5).map(e => `  • ${e.text}`).join('\n')}`
         : 'No recent system events.';
-
     return [
         `📊 SYSTEM HEALTH: ${healthLine}`,
         `🔔 ALERTS: ${alertLine}`,
@@ -213,24 +178,18 @@ const getPlainEnglishBriefing = (state) => {
         `\n⏱️ Snapshot: ${state.snapshot_time || 'initializing...'}`
     ].join('\n\n');
 };
-
 const initializeEyes = async () => {
     await startRedisSubscriber();
-
     await pollSystemHealth();
-
     pollInterval = setInterval(pollSystemHealth, 10000);
-
     console.log('[👁️] Wingman Eyes: System visibility active (polling every 10s).');
 };
-
 const shutdownEyes = async () => {
     if (pollInterval) clearInterval(pollInterval);
     if (eyesSubscriber) {
         try { await eyesSubscriber.unsubscribe(); await eyesSubscriber.quit(); } catch (e) { }
     }
 };
-
 module.exports = {
     initializeEyes,
     shutdownEyes,

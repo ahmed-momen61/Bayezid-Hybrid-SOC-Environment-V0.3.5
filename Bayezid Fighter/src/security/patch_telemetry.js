@@ -1,16 +1,13 @@
 const fs = require('fs');
 const path = require('path');
-
 const aiServicePath = path.join(__dirname, 'aiService.js');
 let aiServiceCode = fs.readFileSync(aiServicePath, 'utf8');
-
 if (!aiServiceCode.includes("const { dataHarvester } = require('../core_ai/bayezidBrain');")) {
     aiServiceCode = aiServiceCode.replace(
         "const { spawn } = require('child_process');",
         "const { spawn } = require('child_process');\nconst { dataHarvester } = require('../core_ai/bayezidBrain');"
     );
 }
-
 const agentsToPatch = [
     { name: 'Scout', func: 'runScoutAgent' },
     { name: 'Breacher', func: 'runBreacherAgent' },
@@ -29,7 +26,6 @@ const agentsToPatch = [
     { name: 'Warden', func: 'runWardenSandbox' },
     { name: 'Overlord', func: 'runOverlordAgent' }
 ];
-
 for (const agent of agentsToPatch) {
     const returnRegex = new RegExp(`return \\{ agent: "${agent.name}"(.*?)\\};`, 'g');
     if (!aiServiceCode.includes(`dataHarvester.harvestAgentExecution('${agent.name}'`)) {
@@ -38,13 +34,10 @@ for (const agent of agentsToPatch) {
         });
     }
 }
-
 fs.writeFileSync(aiServicePath, aiServiceCode);
 console.log("[+] Injected telemetry hooks into aiService.js");
-
 const wingmanServicePath = path.join(__dirname, 'wingmanService.js');
 let wingmanCode = fs.readFileSync(wingmanServicePath, 'utf8');
-
 if (!wingmanCode.includes("dataHarvester.harvestWingmanInteraction")) {
     const finalReturn = `return finalContent;`;
     if (wingmanCode.includes(finalReturn)) {

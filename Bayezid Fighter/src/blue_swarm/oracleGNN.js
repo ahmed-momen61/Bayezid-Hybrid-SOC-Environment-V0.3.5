@@ -2,7 +2,6 @@ const crypto = require('crypto');
 const axios = require('axios');
 const { askRedSwarmAI, smartExec } = require('../core_ai/aiService');
 const { publishLiveEvent } = require('../memory_systems/memoryService');
-
 class NetworkNode {
     constructor(ip, hostname = '', os = 'unknown', services = []) {
         this.ip = ip;
@@ -18,7 +17,6 @@ class NetworkNode {
         this.lastSeen = Date.now();
     }
 }
-
 class NetworkGNN {
     constructor() {
         this.nodes = new Map(); 
@@ -27,7 +25,6 @@ class NetworkGNN {
         this.propagationLayers = 3;
         this.lateralMovementThreshold = 0.7; 
     }
-
     addNode(ip, data = {}) {
         if (!this.nodes.has(ip)) {
             this.nodes.set(ip, new NetworkNode(ip, data.hostname, data.os, data.services || []));
@@ -40,40 +37,30 @@ class NetworkGNN {
         }
         return this.nodes.get(ip);
     }
-
     addEdge(srcIp, dstIp, protocol = 'tcp', port = 0, weight = 1.0) {
         this.addNode(srcIp);
         this.addNode(dstIp);
-
         const srcNode = this.nodes.get(srcIp);
         const dstNode = this.nodes.get(dstIp);
-
         srcNode.neighbors.set(dstIp, { weight, protocol, port, direction: 'out' });
         dstNode.neighbors.set(srcIp, { weight, protocol, port, direction: 'in' });
-
         this.edges.push({ src: srcIp, dst: dstIp, protocol, port, weight, timestamp: Date.now() });
     }
-
     initializeFeatures() {
         for (const [ip, node] of this.nodes) {
             const octets = ip.split('.').map(Number);
             const features = new Float32Array(this.featureDim);
-
             features[0] = node.neighbors.size / Math.max(this.nodes.size, 1); 
             features[1] = node.services.length / 20; 
             features[2] = node.compromised ? 1.0 : 0.0; 
             features[3] = node.risk / 100; 
-
             features[4] = octets[0] / 255;
             features[5] = octets[1] / 255;
             features[6] = octets[2] / 255;
             features[7] = octets[3] / 255;
-
             const riskyPorts = [22, 23, 80, 443, 445, 3389, 5985, 8080, 8443, 9200];
             features[8] = node.services.filter(s => riskyPorts.includes(s.port)).length / riskyPorts.length;
-
             features[9] = Math.min((Date.now() - node.lastSeen) / 3600000, 1.0);
-
             let neighborRisk = 0;
             for (const [nip] of node.neighbors) {
                 const neighbor = this.nodes.get(nip);
@@ -81,26 +68,20 @@ class NetworkGNN {
                 if (neighbor && neighbor.risk > 50) neighborRisk += 0.1;
             }
             features[10] = Math.min(neighborRisk, 1.0);
-
             const sameSubnet = [...this.nodes.values()].filter(n => n.subnet === node.subnet).length;
             features[11] = sameSubnet / Math.max(this.nodes.size, 1);
-
             features[12] = node.isolated ? 1.0 : 0.0;
             features[13] = 0;
             features[14] = 0;
             features[15] = 0;
-
             node.features = features;
         }
     }
-
     async propagate() {
         console.log(`[🌐] ORACLE-G: Building feature matrix for PyTorch GNN...`);
         this.initializeFeatures();
-
         const nodesList = Array.from(this.nodes.keys());
         const nodeMatrix = nodesList.map(ip => Array.from(this.nodes.get(ip).features));
-
         const edgeList = [];
         for (const edge of this.edges) {
             const srcIdx = nodesList.indexOf(edge.src);
@@ -109,13 +90,11 @@ class NetworkGNN {
                 edgeList.push([srcIdx, dstIdx]);
             }
         }
-
         try {
             const gnnResult = await axios.post('http://127.0.0.1:8001/api/v1/gnn/predict-lateral', {
                 nodes: nodeMatrix,
                 edges: edgeList
             });
-
             const riskScores = gnnResult.data.risk_scores || [];
             for (let i = 0; i < riskScores.length; i++) {
                 const ip = nodesList[i];
@@ -130,24 +109,18 @@ class NetworkGNN {
             console.error(`[!] Failed to reach PyTorch GNN backend: ${e.message}`);
         }
     }
-
     predictLateralMovement(compromisedIp) {
         const node = this.nodes.get(compromisedIp);
         if (!node) return [];
-
         const predictions = [];
-
         for (const [neighborIp, edgeData] of node.neighbors) {
             const neighbor = this.nodes.get(neighborIp);
             if (!neighbor || neighbor.compromised || neighbor.isolated) continue;
-
             const sameSubnet = neighbor.subnet === node.subnet ? 0.3 : 0;
             const serviceExposure = neighbor.features ? neighbor.features[8] * 0.3 : 0;
             const degreeCentrality = neighbor.features ? neighbor.features[0] * 0.2 : 0;
             const edgeWeight = edgeData.weight * 0.2;
-
             const probability = sameSubnet + serviceExposure + degreeCentrality + edgeWeight;
-
             predictions.push({
                 targetIp: neighborIp,
                 hostname: neighbor.hostname,
@@ -157,42 +130,30 @@ class NetworkGNN {
                 riskScore: neighbor.risk
             });
         }
-
         predictions.sort((a, b) => b.probability - a.probability);
-
         return predictions;
     }
-
     async preemptiveIsolation(compromisedIp) {
         console.log(`\n[🛡️] =============================================`);
         console.log(`[🛡️] ORACLE-G: Pre-emptive Isolation Triggered`);
         console.log(`[🛡️] Compromised Node: ${compromisedIp}`);
         console.log(`[🛡️] =============================================\n`);
-
         await this.propagate();
-
         const node = this.nodes.get(compromisedIp);
         if (node) node.compromised = true;
-
         await this.propagate();
-
         const predictions = this.predictLateralMovement(compromisedIp);
-
         console.log(`[🛡️] Lateral Movement Predictions:`);
         const isolationActions = [];
-
         for (const pred of predictions) {
             console.log(`  → ${pred.targetIp} (${pred.hostname || 'unknown'}) | Probability: ${(pred.probability * 100).toFixed(1)}% | Risk: ${pred.riskScore}`);
-
             if (pred.probability >= this.lateralMovementThreshold) {
                 console.log(`  [🔴] ABOVE THRESHOLD (${this.lateralMovementThreshold * 100}%) — Isolating!`);
-
                 const isolationRules = [
                     `iptables -I INPUT -s ${compromisedIp} -d ${pred.targetIp} -j DROP`,
                     `iptables -I OUTPUT -s ${pred.targetIp} -d ${compromisedIp} -j DROP`,
                     `iptables -I FORWARD -s ${compromisedIp} -d ${pred.targetIp} -j DROP`
                 ];
-
                 const action = {
                     targetIp: pred.targetIp,
                     probability: pred.probability,
@@ -200,7 +161,6 @@ class NetworkGNN {
                     status: 'PENDING',
                     timestamp: new Date().toISOString()
                 };
-
                 for (const rule of isolationRules) {
                     try {
                         console.log(`  [⚡] Executing: ${rule}`);
@@ -211,14 +171,11 @@ class NetworkGNN {
                         action.status = 'SIMULATED';
                     }
                 }
-
                 const targetNode = this.nodes.get(pred.targetIp);
                 if (targetNode) targetNode.isolated = true;
-
                 isolationActions.push(action);
             }
         }
-
         try {
             await publishLiveEvent('bayezid_tactical_feed', 'ORACLE_PREEMPTIVE_ISOLATION', {
                 compromisedIp,
@@ -226,9 +183,7 @@ class NetworkGNN {
                 predictions: predictions.slice(0, 5)
             });
         } catch (e) {}
-
         console.log(`\n[🛡️] ORACLE-G: ${isolationActions.length} nodes pre-emptively isolated.`);
-
         return {
             compromisedNode: compromisedIp,
             predictions,
@@ -241,51 +196,35 @@ class NetworkGNN {
             }
         };
     }
-
-    // Phase 18: Predictive Temporal Trapping
     predictTemporalTraps(compromisedIp) {
         console.log(`\n[🔮] ORACLE-G: Calculating attacker's next 3 temporal steps from ${compromisedIp}...`);
-        
-        // Use existing lateral movement prediction
         const predictions = this.predictLateralMovement(compromisedIp);
-        
-        // Take the top 3 most probable next targets
         const top3 = predictions.slice(0, 3);
-        
         console.log(`[🔮] Temporal Traps deployed on:`);
         const deployedTraps = [];
-        
         for (const target of top3) {
             console.log(`  → ${target.targetIp} (${target.hostname || 'unknown'}) | Temporal Confidence: ${(target.probability * 100).toFixed(1)}%`);
             deployedTraps.push(target.targetIp);
         }
-        
         return deployedTraps;
     }
-
     ingestTraffic(trafficEntries) {
         console.log(`[🌐] ORACLE-G: Ingesting ${trafficEntries.length} traffic entries...`);
-
         for (const entry of trafficEntries) {
             const { srcIp, dstIp, protocol, port, hostname, os, services } = entry;
-
             this.addNode(srcIp, { hostname: entry.srcHostname, os: entry.srcOs });
             this.addNode(dstIp, { hostname, os, services });
             this.addEdge(srcIp, dstIp, protocol || 'tcp', port || 0, 1.0);
         }
-
         console.log(`[🌐] Graph updated: ${this.nodes.size} nodes, ${this.edges.length} edges.`);
     }
-
     async ingestNmapScan(targetSubnet) {
         console.log(`[🌐] ORACLE-G: Running stealth nmap scan on ${targetSubnet}...`);
-
         try {
             const { stdout } = await smartExec(
                 `nmap -sn -T2 ${targetSubnet} -oG -`,
                 60000, false
             );
-
             const lines = stdout.split('\n');
             for (const line of lines) {
                 const hostMatch = line.match(/Host:\s+(\d+\.\d+\.\d+\.\d+)\s+\(([^)]*)\)/);
@@ -294,16 +233,13 @@ class NetworkGNN {
                     this.addNode(ip, { hostname });
                 }
             }
-
             console.log(`[✔] Nmap scan complete. ${this.nodes.size} hosts discovered.`);
         } catch (e) {
             console.log(`[!] Nmap scan failed: ${e.message}. Using existing topology.`);
         }
     }
-
     toMermaid() {
         let mermaid = 'graph LR\n';
-
         for (const [ip, node] of this.nodes) {
             const safeId = ip.replace(/\./g, '_');
             const label = node.hostname ? `${node.hostname}\\n${ip}` : ip;
@@ -311,10 +247,8 @@ class NetworkGNN {
             if (node.compromised) style = ':::compromised';
             else if (node.isolated) style = ':::isolated';
             else if (node.risk > 60) style = ':::highrisk';
-
             mermaid += `    ${safeId}["${label} (Risk: ${node.risk})"]${style}\n`;
         }
-
         const seen = new Set();
         for (const edge of this.edges.slice(-100)) {
             const key = `${edge.src}-${edge.dst}`;
@@ -324,10 +258,8 @@ class NetworkGNN {
             const dstId = edge.dst.replace(/\./g, '_');
             mermaid += `    ${srcId} -->|${edge.protocol}:${edge.port}| ${dstId}\n`;
         }
-
         return mermaid;
     }
-
     getTopology() {
         const nodeList = [];
         for (const [ip, node] of this.nodes) {
@@ -343,7 +275,6 @@ class NetworkGNN {
                 neighborCount: node.neighbors.size
             });
         }
-
         return {
             nodes: nodeList,
             edgeCount: this.edges.length,
@@ -352,7 +283,5 @@ class NetworkGNN {
         };
     }
 }
-
 const oracleGNN = new NetworkGNN();
-
 module.exports = { NetworkGNN, oracleGNN };

@@ -1,23 +1,17 @@
-
 const { Telegraf } = require('telegraf');
 const { processMessage } = require('./wingmanService');
 const axios = require('axios');
-
 const TELEGRAM_BOT_TOKEN = process.env.WINGMAN_TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.WINGMAN_TELEGRAM_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
-
 let bot = null;
 let botActive = false;
-
 const MAX_TELEGRAM_MSG = 4000;
-
 const splitMessage = (text) => {
     if (text.length <= MAX_TELEGRAM_MSG) return [text];
     const chunks = [];
     let remaining = text;
     while (remaining.length > 0) {
         let chunk = remaining.substring(0, MAX_TELEGRAM_MSG);
-
         const lastNewline = chunk.lastIndexOf('\n');
         if (lastNewline > MAX_TELEGRAM_MSG * 0.5) {
             chunk = remaining.substring(0, lastNewline);
@@ -27,23 +21,18 @@ const splitMessage = (text) => {
     }
     return chunks;
 };
-
 const escapeHTML = (text) => {
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 };
-
 const setupCommands = (bot) => {
-
     bot.use(async (ctx, next) => {
         const adminChatId = process.env.WINGMAN_TELEGRAM_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
         if (ctx.chat && ctx.chat.id.toString() !== adminChatId) {
             console.log(`[⚠️] Unauthorized access attempt from Chat ID: ${ctx.chat.id}`);
-
             return;
         }
         return next();
     });
-
     bot.command('start', async (ctx) => {
         await ctx.replyWithHTML(
             `🦾 <b>THE WINGMAN — Bayezid SOC Copilot</b>\n\n` +
@@ -61,13 +50,11 @@ const setupCommands = (bot) => {
             `Or just send me any question — I understand natural language. 🧠`
         );
     });
-
     const dispatchAsync = async (ctx, prompt, sessionId) => {
         let thinkingMsg;
         try {
             thinkingMsg = await ctx.reply("🤔 Thinking...");
         } catch(e) { return; }
-        
         Promise.resolve().then(async () => {
             let response = '';
             try {
@@ -76,9 +63,7 @@ const setupCommands = (bot) => {
             } catch (e) {
                 response = `⚠️ Error processing request: ${e.message}`;
             }
-
             if (!response || response.trim() === '') response = 'Processed request successfully, but no output generated.';
-
             const chunks = splitMessage(response);
             try {
                 await ctx.telegram.editMessageText(ctx.chat.id, thinkingMsg.message_id, undefined, chunks[0]);
@@ -90,33 +75,27 @@ const setupCommands = (bot) => {
             }
         }).catch(e => console.error("[WINGMAN] Async dispatch error:", e.message));
     };
-
     bot.command('status', async (ctx) => {
         const sessionId = `telegram_${ctx.chat.id}_status`;
         await dispatchAsync(ctx, 'Give me a quick system status summary', sessionId);
     });
-
     bot.command('alerts', async (ctx) => {
         const args = ctx.message.text.split(' ');
         const n = parseInt(args[1]) || 5;
         const sessionId = `telegram_${ctx.chat.id}_alerts`;
         await dispatchAsync(ctx, `Show me the last ${n} alerts with their severity and status`, sessionId);
     });
-
     bot.command('supervise', async (ctx) => {
         const agent = ctx.message.text.split(' ').slice(1).join(' ');
         if (!agent) return ctx.reply('Usage: /supervise <agent_name_or_target_ip>');
         const sessionId = `telegram_${ctx.chat.id}_supervise`;
         await dispatchAsync(ctx, `Supervise agent/target ${agent} and show me its recent events`, sessionId);
     });
-
     bot.command('block', async (ctx) => {
         const ip = ctx.message.text.split(' ')[1];
         if (!ip) return ctx.reply('Usage: /block <ip_address>');
-
         const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
         if (!ipRegex.test(ip)) return ctx.reply('❌ Invalid IP format.');
-
         await ctx.replyWithHTML(
             `⚠️ About to block <code>${escapeHTML(ip)}</code> at the OS level via KernelStriker.\n\n<b>Confirm?</b>`,
             {
@@ -129,7 +108,6 @@ const setupCommands = (bot) => {
             }
         );
     });
-
     bot.command('approve', async (ctx) => {
         const operationId = ctx.message.text.split(' ')[1];
         if (!operationId) return ctx.reply('Usage: /approve <operationId>');
@@ -142,7 +120,6 @@ const setupCommands = (bot) => {
         }
         await ctx.replyWithHTML(`✅ Operation <code>${escapeHTML(operationId)}</code> approved via Telegram.`);
     });
-
     bot.command('deny', async (ctx) => {
         const operationId = ctx.message.text.split(' ')[1];
         if (!operationId) return ctx.reply('Usage: /deny <operationId>');
@@ -155,32 +132,26 @@ const setupCommands = (bot) => {
         }
         await ctx.replyWithHTML(`❌ Operation <code>${escapeHTML(operationId)}</code> denied via Telegram.`);
     });
-
     bot.command('train', async (ctx) => {
         const sessionId = `telegram_${ctx.chat.id}_train`;
         await dispatchAsync(ctx, 'Force a LoRA training cycle now', sessionId);
     });
-
     bot.command('lora_status', async (ctx) => {
         const sessionId = `telegram_${ctx.chat.id}_lora`;
         await dispatchAsync(ctx, 'What is the current LoRA training status and metrics?', sessionId);
     });
-
     bot.command('brief', async (ctx) => {
         const sessionId = `telegram_${ctx.chat.id}_brief`;
         await dispatchAsync(ctx, 'Give me a comprehensive system briefing covering health, alerts, active operations, LoRA status, and any recent notable events', sessionId);
     });
-
     bot.on('text', async (ctx) => {
         const message = ctx.message.text;
         const chatId = ctx.chat.id.toString();
         const sessionId = `telegram_${chatId}_chat`;
         await dispatchAsync(ctx, message, sessionId);
     });
-
     bot.on('callback_query', async (ctx) => {
         const data = ctx.callbackQuery.data;
-
         if (data.startsWith('confirm_block_')) {
             const ip = data.replace('confirm_block_', '');
             try {
@@ -245,21 +216,16 @@ const setupCommands = (bot) => {
         } else if (data === 'evolution_defer') {
             await ctx.editMessageText('⏳ Evolution deferred. I will ask again when conditions are still met.');
         }
-
         try { await ctx.answerCbQuery(); } catch (e) {  }
     });
 };
-
 const sendProactiveAlert = async (message, keyboard = null) => {
     const chatId = TELEGRAM_CHAT_ID;
     if (!chatId) return;
-
     const token = TELEGRAM_BOT_TOKEN;
     if (!token) return;
-
     const opts = { chat_id: chatId, text: message, parse_mode: 'HTML' };
     if (keyboard) opts.reply_markup = { inline_keyboard: keyboard };
-
     try {
         if (bot && botActive) {
             await bot.telegram.sendMessage(chatId, message, {
@@ -267,18 +233,15 @@ const sendProactiveAlert = async (message, keyboard = null) => {
                 ...(keyboard ? { reply_markup: { inline_keyboard: keyboard } } : {})
             });
         } else {
-
             await axios.post(`https://api.telegram.org/bot${token}/sendMessage`, opts);
         }
     } catch (e) {
         console.error('[-] Telegram proactive alert failed:', e.message);
     }
 };
-
 const sendEnhancedAlert = async (alertData, osintData) => {
     const ip = alertData.extracted_ip || alertData.sourceIp || 'Unknown';
     const alertId = alertData.id || alertData.alertId || 'N/A';
-
     const message = `🚨 <b>BAYEZID SOC ALERT</b> 🚨\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
         `🔴 <b>Severity:</b> ${alertData.severity || 'UNKNOWN'}\n` +
@@ -290,7 +253,6 @@ const sendEnhancedAlert = async (alertData, osintData) => {
         `📝 <b>Report:</b>\n<i>${(alertData.detailed_report || alertData.report || 'No details').substring(0, 500)}</i>\n` +
         `━━━━━━━━━━━━━━━━━━━━\n` +
         `⚙️ <i>Engine: ${alertData.engine_used || 'Bayezid AI'}</i>`;
-
     const keyboard = [
         [
             { text: '🔍 Full Analysis', callback_data: `wingman_analyze_${alertId}` },
@@ -301,37 +263,30 @@ const sendEnhancedAlert = async (alertData, osintData) => {
             { text: '✅ False Positive', callback_data: 'cancel_action' }
         ]
     ];
-
     await sendProactiveAlert(message, keyboard);
 };
-
 const startTelegramBot = () => {
     if (!TELEGRAM_BOT_TOKEN) {
         console.log('[📱] Telegram Bot Token not set. Wingman Telegram disabled.');
         return;
     }
-
     bot = new Telegraf(TELEGRAM_BOT_TOKEN);
     setupCommands(bot);
-
     bot.launch().then(() => {
         botActive = true;
         console.log('[📱] Wingman Telegram Bot launched and listening.');
     }).catch(e => {
         console.error('[📱] Telegram Bot launch failed:', e.message);
     });
-
     process.once('SIGINT', () => { if (bot) bot.stop('SIGINT'); });
     process.once('SIGTERM', () => { if (bot) bot.stop('SIGTERM'); });
 };
-
 const stopTelegramBot = () => {
     if (bot) {
         bot.stop();
         botActive = false;
     }
 };
-
 module.exports = {
     startTelegramBot,
     stopTelegramBot,

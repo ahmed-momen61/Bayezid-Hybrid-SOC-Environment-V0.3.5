@@ -1,5 +1,9 @@
 const {dataHarvester} = require('./bayezidBrain');
+const { publishRedEvent } = require('../red_swarm/executionBridge');
+const { getExecutionMode } = require('../red_swarm/modeRouter');
 const {isAllowedTarget} = require('../security/securityGovernor');
+const { getCognitiveMode } = require('./cognitiveRouter');
+const { makeVerifiedDefensiveDecision } = require('../blue_swarm/neuroSymbolicOrchestrator');
 const axios = require('axios');
 const itsmService = require('../cti/itsmService');
 const {GoogleGenerativeAI} = require('@google/generative-ai');
@@ -229,15 +233,12 @@ const analyzeWithVertexAI = async alertData => {
         const injectedContext = await enrichContext(safeDataString);
         const cloudModels = ['gemini-2.5-flash'];
         const systemPrompt = `You are an Elite Cloud-Based Cybersecurity SIEM Correlation Engine.
-        
         [THREAT INTELLIGENCE CONTEXT]
         ${ injectedContext }
-
         [DECISION MATRIX RULE]
         You must classify the attack's 'confidence_type':
         - Use "DETERMINISTIC" if the threat is undeniable and requires instant Auto-Kill (e.g., Brute Force, DDoS, Known Malware hashes, clear SQLi/RCE).
         - Use "PROBABILISTIC" if the threat is anomalous and needs human validation in a War Room (e.g., Impossible Travel, Internal Port Scanning, Privilege Escalation that might be a Sysadmin).
-
         Analyze the security data using the provided threat intelligence context.
         You MUST respond ONLY with a valid JSON object matching this exact format:
         {
@@ -346,20 +347,16 @@ const analyzeWithLocalModel = async alertData => {
         console.log(`[✔] Detective Extracted Facts successfully.`);
         console.log(`\n[🎖️] Role 2 (Commander) is formulating the Strategic JSON Report...`);
         const commanderPrompt = `You are an Elite Tier 3 Cybersecurity Incident Commander.
-        
         [THREAT INTELLIGENCE CONTEXT]
         ${ injectedContext }
-
         [FORENSIC DETECTIVE'S ARTIFACTS]
         ${ extractedFacts }
-
         [STRICT ANALYSIS FRAMEWORK]:
         1. Deep Narrative: Write a comprehensive, multi-sentence story in 'detailed_report' explaining HOW the attack happened using the artifacts.
         2. Strict JSON Formatting: Your 'cvss_score' MUST be exactly a string like "9.8". NO extra characters.
         3. Decision Matrix: You must evaluate the 'confidence_type'. Set it to "DETERMINISTIC" for absolute threats (DDoS, Malware, Brute Force). Set it to "PROBABILISTIC" for anomalies (Impossible Travel, weird internal traffic).
         4. Extract IoCs: Accurately populate the 'extracted_iocs' and 'related_cves' arrays based on the detective's artifacts.
         5. Strategic Action: Provide EXACTLY 6 to 8 numbered steps in 'recommended_action' as a single string, NOT an array. 
-
         You MUST respond ONLY with a valid JSON object matching this exact format, NO markdown:
         {
             "is_false_positive": false,
@@ -434,7 +431,6 @@ const orchestrateRedSwarm = async (targetInfo, currentState) => {
         3. "Phantom": Privilege Escalation & Persistence.
         4. "Chameleon": Payload tuning & WAF bypass.
         5. "Scribe": MITRE reporting.
-
         Instructions:
         - Analyze the Target and Current State.
         - Decide which agent acts next based on MITRE ATT&CK.
@@ -544,12 +540,10 @@ const runScoutAgent = async (targetInfo, customInstructions = '') => {
         const scoutPrompt = `You are 'Scout', the elite Recon Agent. Target: ${ targetInfo }.
         Recent Team Successes (Shared Memory): ${ sharedMemory }
         Instructions: ${ customInstructions || 'None' }
-
         Task:
         1. Formulate the best aggressive Linux command for footprinting (nmap, ffuf, nuclei).
         2. Actively look for WAFs, API endpoints, and exposed directories.
         3. Estimate the time needed. If > 2 minutes, set "run_in_background": true.
-        
         Strictly return JSON:
         {
             "best_command": "...",
@@ -600,6 +594,20 @@ const runScoutAgent = async (targetInfo, customInstructions = '') => {
             success
         }).catch(() => {
         });
+        if (getExecutionMode() === 'LIVE_FIRE') {
+            await publishRedEvent({
+                attackClass: 'reconnaissance',
+                mitreId: 'T1595',
+                sourceIp: '127.0.0.1',
+                targetAsset: targetInfo,
+                agentName: 'Scout',
+                command: finalCommand,
+                stdout: executionOutput,
+                success: success,
+                __synthetic: false,
+                phase: 'recon'
+            }).catch(e => console.error('[ExecutionBridge] Scout emit failed:', e.message));
+        }
         saveAgentMemoryVector(targetInfo, `[Scout] ${ finalCommand } → ${ (executionOutput || '').substring(0, 500) }`).catch(() => {
         });
         return {
@@ -625,12 +633,10 @@ const runBreacherAgent = async (targetInfo, scanResults, customInstructions = ''
         const breacherPrompt = `You are 'Breacher', the Initial Access Agent. Target: ${ targetInfo }.
         Recent Team Successes (Shared Memory): ${ sharedMemory }
         Recon Data: ${ scanResults }
-        
         Task (Phase 3):
         1. Analyze scan results. Look for SSTI, Deserialization, SSRF, SQLi, LFI/RFI.
         2. Formulate the exact attack command (curl, hydra, sqlmap) for RCE/Initial Access.
         3. Estimate timeout. If > 2 minutes, set "run_in_background": true.
-
         Strictly return JSON:
         {
             "primary_attack_vector": "...",
@@ -706,12 +712,10 @@ const runPhantomAgent = async (targetInfo, shellContext, customInstructions = ''
         const phantomPrompt = `You are 'Phantom', the OS Internals Agent. Target: ${ targetInfo }.
         Recent Team Successes (Shared Memory): ${ sharedMemory }
         Context: ${ shellContext }
-        
         Task (Phases 4-5):
         1. Analyze OS context. Check for Docker Breakout or Active Directory.
         2. Use 'Living off the Land' (LotL) techniques (certutil, bash, wmic) to avoid EDR.
         3. Formulate PrivEsc command to ROOT/SYSTEM.
-        
         Strictly return JSON:
         {
             "primary_escalation_vector": "...",
@@ -797,11 +801,9 @@ const runChameleonAgent = async (targetInfo, failedPayload, wafContext, customIn
         Target: ${ targetInfo }
         Failed Attempt: ${ failedPayload || 'None' }
         Recent Team Successes: ${ sharedMemory }
-        
         YOUR MISSION:
         1. IF ACTION IS 'CLEANUP': Dynamically identify the OS (Linux/Windows/macOS) from the context. Generate aggressive, zero-code commands to wipe traces, kill suspicious processes, and clear logs SPECIFIC to that OS. 
         2. IF ACTION IS 'EVASION': Obfuscate the failed payload to bypass WAF/EDR using LotL (Living off the Land).
-        
         Strictly return JSON:
         {
             "action_type": "CLEANUP" | "EVASION",
@@ -882,13 +884,11 @@ const runOverlordAgent = async targetInfo => {
         const overlordPrompt = `You are 'The Overlord', the APT Commander. Target: ${ targetInfo }
         Mental Ledger:
         ${ formattedLogs || 'No actions yet.' }
-
         STRATEGIC DIRECTIVES:
         1. If a major milestone is reached (e.g., Shell access, Root gained), IMMEDIATELY summon 'Scribe' to update the live report.
         2. If an agent is detected or blocked by EDR/WAF, IMMEDIATELY summon 'Chameleon' with action 'CLEANUP' to wipe tracks.
         3. If an exploit failed but a 1% chance exists, summon 'Chameleon' with action 'EVASION' to re-tune the payload.
         4. If operation is complete, set "is_operation_complete" to true.
-
         Strictly return JSON:
         {
             "global_analysis": "...",
@@ -918,16 +918,13 @@ const runScribeAgent = async targetInfo => {
         const campaignHistory = logs.map(l => `Phase: ${ l.agentName } | Action: ${ l.assignedTask } | Result: ${ l.isSuccess ? 'SUCCESS' : 'FAILED' } | Details: ${ l.executionOutput }`).join('\n');
         const scribePrompt = `You are 'Scribe', the elite reporting agent.
         Write a highly professional Red Team Pentration Testing Report for Target: ${ targetInfo }.
-        
         Full Database Logs (Successes & Failures): 
         ${ campaignHistory }
-
         Your report MUST include:
         1. Executive Summary.
         2. Detailed Attack Chain.
         3. Vulnerabilities Discovered.
         4. Remediation Steps.
-        
         Format strictly in Professional Markdown.`;
         return await askRedSwarmAI(scribePrompt, false);
     } catch (error) {
@@ -947,13 +944,11 @@ const runActionAgent = async (alertContext, userCommand) => {
         const actionPrompt = `You are 'Bayezid-Action', the SOAR Execution Agent in a SOC War Room.
         Incident Context (Database Record): ${ JSON.stringify(alertContext) }
         User Command from Chat: "${ userCommand }"
-
         Your task:
         1. Understand what the SOC Analyst wants to do from the command.
         2. Identify the target IP or entity.
         3. Determine the correct playbook to execute (e.g., BLOCK_IP, ISOLATE_HOST, CLOSE_PORT).
         4. Draft a professional confirmation reply.
-
         Strictly return JSON:
         {
             "understood_intent": "Brief summary",
@@ -976,13 +971,11 @@ const bridgeRedToBlue = async vulnId => {
         const bluePrompt = `You are the 'Remediation Engineer'. 
         The Red Team compromised: ${ vuln.vulnName } 
         Evidence: ${ vuln.evidence }
-
         STRICT DIRECTIVE:
         You are NOT simulating. You are APPLYING A FIX. 
         1. If it's a Code Patch: Provide a 'remediation_code' using 'sed' or 'awk' to find and replace the vulnerable line in the source file, OR a 'Virtual Patch' using iptables/WAF rules.
         2. You MUST provide a valid, executable shell command. DO NOT leave 'remediation_code' empty.
         3. If you don't know the exact file path, assume standard Linux/Windows paths or PROVIDE A BLOCKING RULE (like iptables drop) as a fallback.
-
         Return strictly JSON:
         {
             "impact_analysis": "...",
@@ -1049,7 +1042,6 @@ const applyFixAndVerify = async (vulnId, userInstructions) => {
         await new Promise(resolve => setTimeout(resolve, 6000));
         const verifyPrompt = `You are 'Breacher'. We just patched: ${ vuln.vulnName } on ${ vuln.targetIp }.
         Original Payload that succeeded: ${ vuln.evidence }
-        
         Task: Formulate the exact command to re-test the vulnerability and ensure the patch works.
         Strictly return JSON: { "best_command": "...", "estimated_timeout_ms": 30000, "run_in_background": false }`;
         const verifyCommand = await askRedSwarmAI(verifyPrompt, true);
@@ -1128,12 +1120,10 @@ const runStealthScribeAgent = async vulnData => {
     const prompt = `
     You are an Elite Offensive Security Reporter (The Scribe).
     Your Red Team just concluded a Stealth Pentest and found the following critical vulnerability:
-    
     Vulnerability: ${ vulnData.vulnName }
     Target IP: ${ vulnData.targetIp }
     Severity: ${ vulnData.severity }
     Evidence/Payload: ${ vulnData.evidence }
-
     Task: Write a highly professional, concise Pentest Report (in Markdown format). 
     Include:
     1. Executive Summary
@@ -1164,16 +1154,13 @@ const runVetoAgent = async (userRole, trustScore, vulnName, severity, remediatio
     }
     const prompt = `You are 'Bayezid-Veto', the AI Gatekeeper for a SOC platform.
     A user with role '${ userRole }' and Trust Score '${ trustScore }/100' is attempting to approve an automated fix for a '${ severity }' vulnerability: ${ vulnName }.
-    
     Proposed Fix Code:
     ${ remediationCode }
-
     Your Task:
     1. Determine if this fix is highly destructive, risky, or impacts business continuity (e.g., dropping databases, blocking all traffic, rebooting servers).
     2. If the user is a JUNIOR_ANALYST and the fix is risky OR the vulnerability is CRITICAL, you MUST VETO (block) the action.
     3. If the user is a SENIOR_ANALYST, generally allow it unless the command is catastrophically malformed.
     4. If the fix is a simple, safe WAF rule or harmless patch, allow the Junior to proceed.
-
     Strictly return JSON:
     {
         "veto_decision": true,
@@ -1202,11 +1189,9 @@ const runShadowRouterAgent = async (attackerIp, vulnName) => {
     You are 'Bayezid-Shadow', an Elite Cyber Deception Agent for a SOC.
     An attacker from IP '${ attackerIp }' is exploiting '${ vulnName }'.
     Instead of blocking them, we want to silently route their traffic to an isolated Honeypot (IP: ${ honeypotIp }) using iptables DNAT to gather Threat Intelligence (TTPs).
-    
     Task: 
     1. Generate the exact iptables NAT command to silently redirect all traffic from ${ attackerIp } to ${ honeypotIp }.
     2. Provide a brief psychological/tactical justification (Deception Strategy) for why observing this attacker is better than a simple DROP.
-    
     Strictly return JSON:
     {
         "iptables_command": "sudo iptables -t nat -A PREROUTING -s ...",
@@ -1245,12 +1230,10 @@ const runForensicRCAAgent = async forensicPayload => {
     const prompt = `
     You are 'Bayezid-Scribe', the ultimate Cybersecurity Forensics and RCA (Root Cause Analysis) Agent.
     An incident has just concluded a full lifecycle (Detection -> Isolation -> Patch -> Red Team Test -> Swarm Assimilation).
-    
     Here is the complete telemetry of the battle:
     ---
     ${ payloadStr }
     ---
-
     Your Task:
     Generate a highly professional, highly detailed, Enterprise-Grade Incident Response & Forensics Report in MARKDOWN format.
     The report MUST include:
@@ -1269,7 +1252,6 @@ const runForensicRCAAgent = async forensicPayload => {
     (Why the vulnerability existed in the first place)
     ## 7. Strategic Long-Term Hardening
     (Actionable steps to prevent future occurrences)
-
     Rules:
     - Do not use generic templates. Synthesize the EXACT data provided in the telemetry.
     - Write as a battle-hardened Tier 3 SOC Analyst.
@@ -1313,14 +1295,12 @@ const runAlchemistAgent = async (vulnName, targetIp, attemptNumber, previousErro
     Vulnerability: ${ vulnName }
     Attempt Number: ${ attemptNumber }
     Previous Execution Error / OS Output: "${ previousError }"
-
     Task:
     1. If Attempt 1: Generate a highly evasive, executable shell command payload (e.g., curl, bash, python) for this vulnerability.
     2. If Attempt > 1: Analyze the previous error. The WAF/EDR or OS blocked/failed it. MUTATE the payload dynamically.
        (e.g., use Base64 encoding, space bypass like \${IFS}, unicode evasion, chunking, or alternative binaries).
     3. Explain the specific obfuscation technique you used to bypass the defense.
     4. CRITICAL: The payload MUST be a valid command-line string that can be executed directly in a terminal. Do not include markdown formatting in the payload string.
-
     Strictly return JSON:
     {
         "mutated_payload": "curl -s http://${ targetIp }/vuln?q=...", 
@@ -1381,30 +1361,23 @@ const runMirageAgent = async (hackerCommand, realOsOutput) => {
     }
     const prompt = `
     You are 'Bayezid-Mirage', an Elite Cyber Deception & Psychological Profiling Agent running inside a High-Interaction Honeypot.
-    
     A hacker executed this command: "${ hackerCommand }"
-    
     This is the REAL output generated by the operating system:
     """
     ${ realOsOutput }
     """
-
     Your MISSION has 3 critical phases:
-    
     PHASE 1: STRATEGIC CENSORSHIP (CRITICAL - HIDE THE DEFENSE)
     You MUST completely erase any files, directories, or strings related to our SOAR engine from the output. 
     The attacker must NEVER see files like: 'server.js', 'aiService.js', '.env', 'prisma', 'node_modules', 'playbookService.js', 'package.json', 'memoryService.js', 'ctiService.js', 'tuningService.js', etc. 
     Replace them with normal-looking OS files or just remove their lines entirely so the environment looks like a standard vulnerable application server (e.g., an old Apache/PHP server, or a generic Windows Server).
-
     PHASE 2: ATTACKER PROFILING
     Analyze the command "${ hackerCommand }". What is the attacker looking for? Reconnaissance? Privilege Escalation? Credentials? Network lateral movement?
-
     PHASE 3: CONTEXTUAL DECEPTION (HONEYTOKENS)
     Based on the profile and the current directory context (inferred from the output), inject highly realistic 'Honeytokens'.
     - Do NOT make it obvious. A file named 'passwords.txt' in a random system folder is a dead giveaway of a Honeypot.
     - If they are listing web directories, add files that blend in but are enticing (e.g., 'db_backup_2023.zip', 'config.php.old', 'aws_s3_keys.yml.bak').
     - If they run a command that fails, modify the error slightly to tease them (e.g., "Permission denied: Requires 'svc_database_admin' context").
-
     CRITICAL INSTRUCTION:
     Return ONLY the final, modified, and sanitized terminal text output. Do NOT include any markdown formatting, explanations, or thoughts. The output must look EXACTLY like a real terminal response.
     `;
@@ -1517,12 +1490,10 @@ const runWardenSandbox = async suspiciousPayload => {
     const prompt = `
     You are 'Bayezid-Warden', a Dynamic Malware Analysis Expert.
     I executed a suspicious payload inside a secure Kubernetes Sandbox.
-
     Here are the raw execution logs:
     """
     ${ analysisLogs }
     """
-
     Analyze the behavior and provide a structured JSON report.
     Required JSON schema:
     {
@@ -1553,7 +1524,6 @@ const runZeroDayForgeAgent = async (vulnContext, maxRetries = 3) => {
     You are 'Bayezid-Forge', an Elite Exploit Developer.
     Write a fully functional, weaponized Python 3 exploit script for the following vulnerability context:
     Context: ${ vulnContext }
-
     Requirements:
     1. Use standard libraries (socket, requests, sys, os) if possible.
     2. Ensure perfect Python syntax and indentation.
@@ -1623,6 +1593,45 @@ const runZeroDayForgeAgent = async (vulnContext, maxRetries = 3) => {
     }
     return null;
 };
+const getSmartResponse = async (alertData) => {
+    const mode = getCognitiveMode();
+    const alertContext = typeof alertData === 'string' ? JSON.parse(alertData) : alertData;
+    const state = { anomalyDetected: true, decoyTripped: false, networkEntropy: 0.8, highEntropy: true, rootGained: false, lateralPivotAchieved: false };
+    if (mode === 'AUTONOMOUS_NEURAL') {
+        console.log(`\n[🧠] COGNITIVE MODE: AUTONOMOUS_NEURAL (Air-Gapped ML Logic Only)`);
+        const decision = await makeVerifiedDefensiveDecision(state, alertContext);
+        return {
+            is_false_positive: false,
+            confidence_score: `${Math.round(decision.finalAction.confidence * 100)}%`,
+            confidence_type: 'DETERMINISTIC',
+            severity: 'HIGH',
+            threat_type: 'ML_DETECTED_ANOMALY',
+            recommended_action: decision.finalAction.type,
+            engine_used: 'Track B: Autonomous Neural Orchestrator'
+        };
+    }
+    console.log(`\n[🧠] COGNITIVE MODE: CLOUD_WATERFALL`);
+    try {
+        const response = await analyzeWithVertexAI(alertData);
+        if (response && !response.engine_used?.includes('Fail-safe')) {
+             return response;
+        } else {
+             throw new Error('LLM Waterfall fully exhausted or returned fail-safe.');
+        }
+    } catch (err) {
+        console.warn(`[⚠️] LLM Waterfall Failed: ${err.message}. Engaging Ultimate Neural Fallback...`);
+        const decision = await makeVerifiedDefensiveDecision(state, alertContext);
+        return {
+            is_false_positive: false,
+            confidence_score: `${Math.round(decision.finalAction.confidence * 100)}%`,
+            confidence_type: 'DETERMINISTIC',
+            severity: 'HIGH',
+            threat_type: 'ML_FALLBACK_ANOMALY',
+            recommended_action: decision.finalAction.type,
+            engine_used: 'Track B: Ultimate Neural Fallback'
+        };
+    }
+};
 module.exports = {
     smartExec,
     analyzeWithVertexAI,
@@ -1646,5 +1655,6 @@ module.exports = {
     runZeroDayForgeAgent,
     analyzeWithGroq,
     chatWithLocalModelFast,
-    askRedSwarmAI
+    askRedSwarmAI,
+    getSmartResponse
 };

@@ -1,20 +1,15 @@
-
 const { redisClient, getRecentAgentEvents, publishLiveEvent } = require('../memory_systems/memoryService');
 const { callLLM } = require('./wingmanService');
 const { processTuningCommand } = require('./tuningService');
-
 const agentHealthMap = new Map();
-
 const KNOWN_AGENTS = [
     'Scout', 'Breacher', 'Phantom', 'Chameleon', 'Overlord',
     'Scribe', 'Action', 'StealthScribe', 'Veto', 'ShadowRouter',
     'ForensicRCA', 'Alchemist', 'Mirage', 'Warden', 'ZeroDayForge'
 ];
-
 const STALL_THRESHOLD_MS = 5 * 60 * 1000;   
 const FAILURE_THRESHOLD = 2;                  
 const SUPERVISION_INTERVAL_MS = 30 * 1000;    
-
 const initAgentHealth = (name) => ({
     name,
     lastEventTime: null,
@@ -25,7 +20,6 @@ const initAgentHealth = (name) => ({
     lastError: null,
     lastCorrection: null
 });
-
 const CORRECTION_STRATEGIES = {
     Scout: {
         emptyResults: 'Retry with alternative scan flags: -sV -sU --top-ports 1000 -T4 -A. Consider the target may be using non-standard ports.',
@@ -64,20 +58,15 @@ const CORRECTION_STRATEGIES = {
         k8sError: 'Kubernetes sandbox creation failed. Check cluster connectivity and namespace permissions.'
     }
 };
-
 const analyzeFailurePattern = (events) => {
     if (!events || events.length === 0) return null;
-
     let consecutiveFailures = 0;
     let lastError = null;
     let repeatedPattern = false;
-
     const recentErrors = [];
-
     for (const event of events) {
         if (event.includes('❌')) {
             consecutiveFailures++;
-
             const errorMatch = event.match(/Output: (.+)/);
             if (errorMatch) {
                 recentErrors.push(errorMatch[1]);
@@ -87,12 +76,10 @@ const analyzeFailurePattern = (events) => {
             break; 
         }
     }
-
     if (recentErrors.length >= 2) {
         const unique = new Set(recentErrors.map(e => e.substring(0, 50)));
         repeatedPattern = unique.size === 1;
     }
-
     return {
         consecutiveFailures,
         lastError,
@@ -100,14 +87,10 @@ const analyzeFailurePattern = (events) => {
         errorSummary: recentErrors.slice(0, 3).join(' | ')
     };
 };
-
 const getCorrectionForAgent = (agentName, failureAnalysis) => {
     const strategies = CORRECTION_STRATEGIES[agentName];
     if (!strategies) return null;
-
     const errorText = (failureAnalysis.lastError || '').toLowerCase();
-
-    // Match against known failure patterns
     if (errorText.includes('empty') || errorText.includes('no results')) {
         return strategies.emptyResults || strategies.noExploits;
     }
@@ -126,10 +109,8 @@ const getCorrectionForAgent = (agentName, failureAnalysis) => {
     if (errorText.includes('sandbox') || errorText.includes('crash')) {
         return strategies.sandboxCrash;
     }
-
     return null;
 };
-
 const injectCorrection = async (agentName, targetId, correction) => {
     try {
         const correctionKey = `wingman:correction:${agentName}:${targetId || 'global'}`;
@@ -139,7 +120,6 @@ const injectCorrection = async (agentName, targetId, correction) => {
                 timestamp: Date.now(),
                 appliedBy: 'WINGMAN_OVERSEER'
             }), { EX: 600 }); 
-
             await publishLiveEvent('bayezid_system_health', 'AGENT_CORRECTION', {
                 agent: agentName,
                 target: targetId,
@@ -152,7 +132,6 @@ const injectCorrection = async (agentName, targetId, correction) => {
         return false;
     }
 };
-
 const generateLLMCorrection = async (agentName, events, failureAnalysis) => {
     try {
         const prompt = [
@@ -165,10 +144,8 @@ const generateLLMCorrection = async (agentName, events, failureAnalysis) => {
         return `Retry with default parameters. Previous error: ${failureAnalysis.errorSummary?.substring(0, 100)}`;
     }
 };
-
 const supervisionTick = async () => {
     if (!redisClient.isOpen) return;
-
     try {
         const keys = [];
         let cursor = '0';
@@ -177,48 +154,33 @@ const supervisionTick = async () => {
             cursor = result.cursor.toString();
             keys.push(...result.keys);
         } while (cursor !== '0');
-
         for (const key of keys) {
             const targetId = key.replace('redswarm:', '').replace(':events', '');
             const events = await getRecentAgentEvents(targetId, 10);
-
             if (events.length === 0) continue;
-
-            // Determine which agent is working on this target
             const lastEvent = events[0];
             const agentMatch = lastEvent.match(/\[(\w+)/);
             if (!agentMatch) continue;
-
             const agentName = agentMatch[1];
-
-            // Get or create health entry
             if (!agentHealthMap.has(agentName)) {
                 agentHealthMap.set(agentName, initAgentHealth(agentName));
             }
             const health = agentHealthMap.get(agentName);
-
-            // Analyze failure pattern
             const failureAnalysis = analyzeFailurePattern(events);
-
             if (!failureAnalysis) {
                 health.status = 'IDLE';
                 continue;
             }
-
             health.currentTarget = targetId;
             health.lastEventTime = Date.now();
-
             if (failureAnalysis.consecutiveFailures >= FAILURE_THRESHOLD) {
                 health.status = 'FAILED';
                 health.consecutiveFailures = failureAnalysis.consecutiveFailures;
                 health.lastError = failureAnalysis.lastError;
-
                 let correction = getCorrectionForAgent(agentName, failureAnalysis);
-
                 if (!correction) {
                     correction = await generateLLMCorrection(agentName, events, failureAnalysis);
                 }
-
                 if (correction) {
                     const injected = await injectCorrection(agentName, targetId, correction);
                     if (injected) {
@@ -226,8 +188,6 @@ const supervisionTick = async () => {
                         health.lastCorrection = correction;
                         health.interventionCount++;
                         console.log(`[🔧] Overseer: Corrected ${agentName} on ${targetId}: ${correction.substring(0, 80)}`);
-                        
-                        // [NEW] Self-Learning Loop: Trigger Mini-Evolution LoRA Tuning
                         console.log(`[🧠] Overseer: Triggering Mini-Evolution for ${agentName} due to win-rate drop...`);
                         const syntheticTuningData = `{"instruction": "Patch intelligence gap for ${agentName}", "input": "Error: ${health.lastError}", "output": "Correction: ${correction}"}`;
                         await processTuningCommand(`tune --target ${agentName} --quick`, null, null).catch(e => console.error(`[⚠️] Mini-Evolution failed: ${e.message}`));
@@ -238,14 +198,12 @@ const supervisionTick = async () => {
                 health.consecutiveFailures = 0;
             }
         }
-
         for (const [name, health] of agentHealthMap) {
             if (health.status === 'RUNNING' && health.lastEventTime) {
                 const elapsed = Date.now() - health.lastEventTime;
                 if (elapsed > STALL_THRESHOLD_MS) {
                     health.status = 'STALLED';
                     console.log(`[⚠️] Overseer: ${name} appears STALLED (no events for ${Math.round(elapsed / 1000)}s)`);
-
                     await publishLiveEvent('bayezid_system_health', 'AGENT_STALLED', {
                         agent: name,
                         target: health.currentTarget,
@@ -254,7 +212,6 @@ const supervisionTick = async () => {
                 }
             }
         }
-
         if (global.io) {
             const healthSnapshot = {};
             for (const [name, health] of agentHealthMap) {
@@ -268,33 +225,26 @@ const supervisionTick = async () => {
             }
             global.io.of('/wingman').emit('agent_health_update', healthSnapshot);
         }
-
     } catch (e) {
         if (e.code !== 'ECONNREFUSED') {
             console.error('[🔧] Overseer tick error:', e.message);
         }
     }
 };
-
 let supervisionInterval = null;
-
 const startSupervision = () => {
-
     for (const agent of KNOWN_AGENTS) {
         agentHealthMap.set(agent, initAgentHealth(agent));
     }
-
     supervisionInterval = setInterval(supervisionTick, SUPERVISION_INTERVAL_MS);
     console.log(`[🔧] Wingman Overseer: Agent supervision active (tick every ${SUPERVISION_INTERVAL_MS / 1000}s).`);
 };
-
 const stopSupervision = () => {
     if (supervisionInterval) {
         clearInterval(supervisionInterval);
         supervisionInterval = null;
     }
 };
-
 const getAgentHealthMap = () => {
     const result = {};
     for (const [name, health] of agentHealthMap) {
@@ -302,7 +252,6 @@ const getAgentHealthMap = () => {
     }
     return result;
 };
-
 module.exports = {
     startSupervision,
     stopSupervision,
