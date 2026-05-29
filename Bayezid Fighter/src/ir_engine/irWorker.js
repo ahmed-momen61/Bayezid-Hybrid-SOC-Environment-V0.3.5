@@ -1,7 +1,7 @@
 const { Worker } = require('@temporalio/worker');
 const path = require('path');
 const activities = require('./irActivities'); 
-async const runWorker = () => {
+const runWorker = async () => {
     console.log('[🛡️] Booting Bayezid Temporal IR Worker...');
     const worker = await Worker.create({
         workflowsPath: path.resolve(__dirname, 'irWorkflow.ts'),

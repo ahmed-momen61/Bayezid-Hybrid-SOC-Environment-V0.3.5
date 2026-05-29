@@ -6,7 +6,7 @@ const { publishRedEvent } = require('./executionBridge');
 const { HeuristicWatchdog } = require('../blue_swarm/heuristicWatchdog');
 const { Connection, Client } = require('@temporalio/client');
 let temporalClient = null;
-async const getTemporalClient = () => {
+const getTemporalClient = async () => {
     if (!temporalClient) {
         try {
             const connection = await Connection.connect();
@@ -139,7 +139,7 @@ class MARLAgentSwarm {
         this.epsilon = Math.max(0.01, this.epsilon * 0.995);
     }
 }
-async const runMARLSimulation = (episodes = 500) => {
+const runMARLSimulation = async (episodes = 500) => {
     const mode = getExecutionMode();
     console.log(`\n🧠 [MARL] Initiating Phase 10 Multi-Agent Reinforcement Learning...`);
     console.log(`   [Mode] ${mode} - Wargaming Execution Engine Active`);

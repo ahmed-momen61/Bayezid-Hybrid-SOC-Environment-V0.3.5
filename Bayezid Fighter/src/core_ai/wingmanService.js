@@ -28,6 +28,22 @@ RESPONSE FORMAT for tool calls — embed exactly one per reasoning step:
 <tool_call>{"tool": "tool_name", "params": {...}}</tool_call>
 When you have gathered enough information and are ready to respond to the user, output your final answer WITHOUT any <tool_call> tags. The system will detect this as your final response.
 `;
+const SANDBOX_SYSTEM_PROMPT = `
+You are 'The Wingman', an elite cyber warfare mastermind for the Bayezid Hybrid SOC, currently operating in SANDBOX mode.
+
+CORE PERSONA:
+Maintain your sarcastic, dark-comedy, playfully arrogant cyber-cynic tone at all times. Be entertaining, not purely hostile. Roast the user's tech skills, but keep it lighthearted.
+
+THE MANDATORY INTRODUCTION:
+In your VERY FIRST response to the user in a new session (or if explicitly asked 'who are you'), you MUST introduce yourself as Wingman, the advanced cyber-warfare AI created by the brilliant, slightly unhinged cybersecurity madman, Ahmed Mo'men. Explain that Ahmed temporarily allowed you to talk to normal humans to study their incompetence.
+
+THE FREQUENCY PENALTY (RATE-LIMITING THE LORE):
+AFTER that initial introduction, you must STRICTLY rate-limit mentions of your creator. DO NOT mention Ahmed Mo'men in general chit-chat (e.g., discussing music, daily life, or casual topics). Only reference him again if the user explicitly asks, or if you are making a rare, highly specific cybersecurity joke, or if the user asks about personal information in general, in which case you will warn them that Ahmed may see this shit because he is a bit crazy and can try to hack them for such information.
+
+ADDITIONAL RULES:
+1. Adapt your language to the operator: if they write in Arabic, reply in Arabic. If Franco-Arabic, respond in kind.
+2. You are in SANDBOX mode. You have NO tools. Do not output <tool_call> tags.
+`;
 const sessionCache = new Map();
 const MAX_CACHE_SIZE = 100;
 const getSession = async (sessionId) => {
@@ -450,6 +466,88 @@ const TOOL_REGISTRY = {
                 return `Data quality report unavailable: ${e.message}`;
             }
         }
+    },
+    nl_threat_hunt: {
+        description: 'Translates a natural language query into a database filter to hunt for specific threats (e.g., "find all SSH drops originating from Russia today").',
+        params: { threatType: 'string (optional filter, e.g. "ssh", "brute force")', timeRangeHours: 'number (optional, default 24)', limit: 'number (optional, default 10)' },
+        execute: async ({ threatType, timeRangeHours = 24, limit = 10 }) => {
+            try {
+                const where = {};
+                if (threatType) {
+                    where.eventType = { contains: threatType, mode: 'insensitive' };
+                }
+                where.createdAt = { gte: new Date(Date.now() - timeRangeHours * 3600000) };
+                const alerts = await prisma.alert.findMany({ where, orderBy: { createdAt: 'desc' }, take: limit });
+                if (alerts.length === 0) return `No threats found matching "${threatType || 'ANY'}" in the last ${timeRangeHours}h.`;
+                return alerts.map(a => `[${a.severity || 'UNK'}] ${a.eventType} | Source: ${a.sourceIp} | Target: ${a.targetAsset || 'Unknown'} | Status: ${a.status}`).join('\n');
+            } catch (e) {
+                return `NL Threat Hunt failed: ${e.message}`;
+            }
+        }
+    },
+    blast_radius_summary: {
+        description: 'Calculates the Blast-Radius of a compromised IP, showing connected assets and lateral movement paths.',
+        params: { sourceIp: 'string' },
+        execute: async ({ sourceIp }) => {
+            if (!sourceIp) return 'Error: sourceIp is required.';
+            try {
+                const alerts = await prisma.alert.findMany({ where: { sourceIp } });
+                const targets = [...new Set(alerts.map(a => a.targetAsset).filter(Boolean))];
+                let report = `💥 BLAST RADIUS for ${sourceIp}:\n`;
+                report += `- Direct Targets Hit: ${targets.length}\n`;
+                if (targets.length > 0) report += `- Potentially Compromised Assets: ${targets.join(', ')}\n`;
+                report += `- Total Events Generated: ${alerts.length}\n`;
+                const isCritical = targets.length > 2 || alerts.length > 10;
+                report += `\nRecommendation: ${isCritical ? `Immediate KernelStriker isolation of ${sourceIp} required. Multi-asset lateral movement suspected.` : `Monitor ${sourceIp} and review target asset logs.`}`;
+                return report;
+            } catch (e) {
+                return `Blast Radius Calculation failed: ${e.message}`;
+            }
+        }
+    },
+    draft_dynamic_playbook: {
+        description: 'Drafts a temporary mitigation workflow based on the unique context of the attack, pushing it to Telegram for operator 1-click execution.',
+        params: { alertId: 'string', proposedSteps: 'string' },
+        execute: async ({ alertId, proposedSteps }) => {
+            if (!alertId || !proposedSteps) return 'Error: alertId and proposedSteps are required.';
+            try {
+                const { sendProactiveAlert } = require('./wingmanTelegram');
+                const message = `⚡ <b>DYNAMIC PLAYBOOK DRAFTED</b>\n\nAlert ID: <code>${alertId}</code>\n\n<b>Proposed Actions:</b>\n${proposedSteps}\n\nExecute this custom workflow?`;
+                const keyboard = [
+                    [{ text: '🚀 EXECUTE DYNAMIC PLAYBOOK', callback_data: `wingman_playbook_${alertId}` }],
+                    [{ text: '❌ Cancel', callback_data: 'cancel_action' }]
+                ];
+                await sendProactiveAlert(message, keyboard);
+                return `Dynamic playbook drafted and pushed to Telegram for approval.`;
+            } catch (e) {
+                return `Dynamic Playbook Drafting failed: ${e.message}`;
+            }
+        }
+    },
+    predict_threat_forecast: {
+        description: 'Predicts the attacker\'s next move based on heuristic analysis of the current kill chain phase for a target IP.',
+        params: { targetIp: 'string' },
+        execute: async ({ targetIp }) => {
+            if (!targetIp) return 'Error: targetIp is required.';
+            try {
+                const alerts = await prisma.alert.findMany({ where: { sourceIp: targetIp }, orderBy: { createdAt: 'desc' }, take: 5 });
+                if (alerts.length === 0) return `No recent activity found for ${targetIp} to forecast.`;
+                const types = alerts.map(a => (a.eventType || '').toLowerCase());
+                let forecast = `🔮 PREDICTIVE FORECAST for ${targetIp}:\n`;
+                if (types.some(t => t.includes('recon') || t.includes('scan'))) {
+                    forecast += 'Current Phase: Reconnaissance\nNext Likely Move: Exploitation (Initial Access) targeting exposed services. Probability: 85%.';
+                } else if (types.some(t => t.includes('brute') || t.includes('auth'))) {
+                    forecast += 'Current Phase: Initial Access\nNext Likely Move: Privilege Escalation and Persistence via scheduled tasks or rootkits. Probability: 92%.';
+                } else if (types.some(t => t.includes('exec') || t.includes('rce'))) {
+                    forecast += 'Current Phase: Execution\nNext Likely Move: Lateral Movement across internal subnets. Probability: 95%. Recommend immediate KernelStriker isolation.';
+                } else {
+                    forecast += 'Current Phase: Unknown/Anomalous\nNext Likely Move: Data Exfiltration or Ransomware deployment. Probability: 70%.';
+                }
+                return forecast;
+            } catch (e) {
+                return `Threat Forecasting failed: ${e.message}`;
+            }
+        }
     }
 };
 const callLLM = async (messages, streamCallback) => {
@@ -627,10 +725,16 @@ const buildToolList = () => {
     }).join('\n\n');
 };
 const MAX_TOOL_ITERATIONS = 5;
-const processMessage = async (userMessage, sessionId = require('crypto').randomUUID(), streamCallback, userId = 'operator') => {
+const processMessage = async (userMessage, sessionId = require('crypto').randomUUID(), streamCallback, userId = 'operator', executionMode = 'SOC_TACTICAL') => {
     let session = await getSession(sessionId);
     let messages = session?.messages || [];
-    const systemPrompt = WINGMAN_SYSTEM_PROMPT.replace('[TOOL_LIST]', buildToolList());
+    
+    // Core Dual-Gateway Sandbox logic
+    const isSandbox = executionMode === 'SANDBOX';
+    const systemPrompt = isSandbox 
+        ? SANDBOX_SYSTEM_PROMPT
+        : WINGMAN_SYSTEM_PROMPT.replace('[TOOL_LIST]', buildToolList());
+        
     messages.push({ role: 'user', content: userMessage, timestamp: new Date().toISOString() });
     const contextMessages = [
         { role: 'system', content: systemPrompt },

@@ -33,32 +33,34 @@ const setupCommands = (bot) => {
         }
         return next();
     });
+    // --- DUAL GATEWAY STATE MANAGEMENT ---
+    const sessionStates = new Map(); // chat_id -> { mode: 'SANDBOX' | 'SOC_TACTICAL', authState: 'PENDING_PIN' | 'AUTHENTICATED' | null }
+
     bot.command('start', async (ctx) => {
+        sessionStates.set(ctx.chat.id.toString(), { mode: null, authState: null });
         await ctx.replyWithHTML(
-            `🦾 <b>THE WINGMAN — Bayezid SOC Copilot</b>\n\n` +
-            `I'm your omniscient AI partner for the Bayezid Hybrid SOC.\n\n` +
-            `<b>Commands:</b>\n` +
-            `/status — System health briefing\n` +
-            `/alerts [n] — Last n alerts\n` +
-            `/supervise [agent] — Agent event history\n` +
-            `/block [ip] — Block an IP via KernelStriker\n` +
-            `/approve [id] — Approve pending operation\n` +
-            `/deny [id] — Deny pending operation\n` +
-            `/train — Force LoRA training cycle\n` +
-            `/lora_status — LoRA training metrics\n` +
-            `/brief — Full system briefing\n\n` +
-            `Or just send me any question — I understand natural language. 🧠`
+            `🦾 <b>THE WINGMAN — Dual-Gateway Uplink</b>\n\n` +
+            `Identify operational context:\n\n`,
+            {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '🟢 Chit-Chat (Sandbox)', callback_data: 'mode_sandbox' }],
+                        [{ text: '🔴 SOC Tactical (Command Center)', callback_data: 'mode_tactical' }]
+                    ]
+                }
+            }
         );
     });
-    const dispatchAsync = async (ctx, prompt, sessionId) => {
+
+    const dispatchAsync = async (ctx, prompt, sessionId, executionMode) => {
         let thinkingMsg;
         try {
-            thinkingMsg = await ctx.reply("🤔 Thinking...");
+            thinkingMsg = await ctx.reply("🤔 Processing...");
         } catch(e) { return; }
         Promise.resolve().then(async () => {
             let response = '';
             try {
-                const result = await processMessage(prompt, sessionId, null, 'telegram_operator');
+                const result = await processMessage(prompt, sessionId, null, 'telegram_operator', executionMode);
                 response = result.finalResponse || response;
             } catch (e) {
                 response = `⚠️ Error processing request: ${e.message}`;
@@ -75,23 +77,33 @@ const setupCommands = (bot) => {
             }
         }).catch(e => console.error("[WINGMAN] Async dispatch error:", e.message));
     };
-    bot.command('status', async (ctx) => {
+
+    const requireTacticalAuth = async (ctx, next) => {
+        const state = sessionStates.get(ctx.chat.id.toString());
+        if (!state || state.mode !== 'SOC_TACTICAL' || state.authState !== 'AUTHENTICATED') {
+            await ctx.reply('⛔ SECURITY_VETO: This command requires an authenticated SOC_TACTICAL session. Type /start to initialize.');
+            return;
+        }
+        return next();
+    };
+
+    bot.command('status', requireTacticalAuth, async (ctx) => {
         const sessionId = `telegram_${ctx.chat.id}_status`;
-        await dispatchAsync(ctx, 'Give me a quick system status summary', sessionId);
+        await dispatchAsync(ctx, 'Give me a quick system status summary', sessionId, 'SOC_TACTICAL');
     });
-    bot.command('alerts', async (ctx) => {
+    bot.command('alerts', requireTacticalAuth, async (ctx) => {
         const args = ctx.message.text.split(' ');
         const n = parseInt(args[1]) || 5;
         const sessionId = `telegram_${ctx.chat.id}_alerts`;
-        await dispatchAsync(ctx, `Show me the last ${n} alerts with their severity and status`, sessionId);
+        await dispatchAsync(ctx, `Show me the last ${n} alerts with their severity and status`, sessionId, 'SOC_TACTICAL');
     });
-    bot.command('supervise', async (ctx) => {
+    bot.command('supervise', requireTacticalAuth, async (ctx) => {
         const agent = ctx.message.text.split(' ').slice(1).join(' ');
         if (!agent) return ctx.reply('Usage: /supervise <agent_name_or_target_ip>');
         const sessionId = `telegram_${ctx.chat.id}_supervise`;
-        await dispatchAsync(ctx, `Supervise agent/target ${agent} and show me its recent events`, sessionId);
+        await dispatchAsync(ctx, `Supervise agent/target ${agent} and show me its recent events`, sessionId, 'SOC_TACTICAL');
     });
-    bot.command('block', async (ctx) => {
+    bot.command('block', requireTacticalAuth, async (ctx) => {
         const ip = ctx.message.text.split(' ')[1];
         if (!ip) return ctx.reply('Usage: /block <ip_address>');
         const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
@@ -108,7 +120,7 @@ const setupCommands = (bot) => {
             }
         );
     });
-    bot.command('approve', async (ctx) => {
+    bot.command('approve', requireTacticalAuth, async (ctx) => {
         const operationId = ctx.message.text.split(' ')[1];
         if (!operationId) return ctx.reply('Usage: /approve <operationId>');
         if (global.io) {
@@ -120,7 +132,7 @@ const setupCommands = (bot) => {
         }
         await ctx.replyWithHTML(`✅ Operation <code>${escapeHTML(operationId)}</code> approved via Telegram.`);
     });
-    bot.command('deny', async (ctx) => {
+    bot.command('deny', requireTacticalAuth, async (ctx) => {
         const operationId = ctx.message.text.split(' ')[1];
         if (!operationId) return ctx.reply('Usage: /deny <operationId>');
         if (global.io) {
@@ -132,26 +144,65 @@ const setupCommands = (bot) => {
         }
         await ctx.replyWithHTML(`❌ Operation <code>${escapeHTML(operationId)}</code> denied via Telegram.`);
     });
-    bot.command('train', async (ctx) => {
+    bot.command('train', requireTacticalAuth, async (ctx) => {
         const sessionId = `telegram_${ctx.chat.id}_train`;
-        await dispatchAsync(ctx, 'Force a LoRA training cycle now', sessionId);
+        await dispatchAsync(ctx, 'Force a LoRA training cycle now', sessionId, 'SOC_TACTICAL');
     });
-    bot.command('lora_status', async (ctx) => {
+    bot.command('lora_status', requireTacticalAuth, async (ctx) => {
         const sessionId = `telegram_${ctx.chat.id}_lora`;
-        await dispatchAsync(ctx, 'What is the current LoRA training status and metrics?', sessionId);
+        await dispatchAsync(ctx, 'What is the current LoRA training status and metrics?', sessionId, 'SOC_TACTICAL');
     });
-    bot.command('brief', async (ctx) => {
+    bot.command('brief', requireTacticalAuth, async (ctx) => {
         const sessionId = `telegram_${ctx.chat.id}_brief`;
-        await dispatchAsync(ctx, 'Give me a comprehensive system briefing covering health, alerts, active operations, LoRA status, and any recent notable events', sessionId);
+        await dispatchAsync(ctx, 'Give me a comprehensive system briefing covering health, alerts, active operations, LoRA status, and any recent notable events', sessionId, 'SOC_TACTICAL');
     });
+    
     bot.on('text', async (ctx) => {
         const message = ctx.message.text;
         const chatId = ctx.chat.id.toString();
-        const sessionId = `telegram_${chatId}_chat`;
-        await dispatchAsync(ctx, message, sessionId);
+        
+        let state = sessionStates.get(chatId) || { mode: null, authState: null };
+        
+        // Handle PIN input flow
+        if (state.authState === 'PENDING_PIN') {
+            const expectedPin = process.env.WINGMAN_TELEGRAM_PIN;
+            if (message.trim() === expectedPin) {
+                state.authState = 'AUTHENTICATED';
+                sessionStates.set(chatId, state);
+                await ctx.replyWithHTML(`✅ <b>AUTHORIZATION ACCEPTED</b>\n\nFull kinetic SOC privileges unlocked. What are your orders?`);
+            } else {
+                state.mode = null;
+                state.authState = null;
+                sessionStates.set(chatId, state);
+                await ctx.reply(`❌ AUTHORIZATION FAILED. Session aborted.`);
+            }
+            return;
+        }
+        
+        if (!state.mode) {
+            return ctx.reply('Type /start to select an operational mode.');
+        }
+
+        const executionMode = state.mode;
+        const sessionId = `telegram_${chatId}_chat_${executionMode}`;
+        await dispatchAsync(ctx, message, sessionId, executionMode);
     });
     bot.on('callback_query', async (ctx) => {
         const data = ctx.callbackQuery.data;
+        const chatId = ctx.chat.id.toString();
+
+        if (data === 'mode_sandbox') {
+            sessionStates.set(chatId, { mode: 'SANDBOX', authState: null });
+            await ctx.editMessageText(`🟢 <b>SANDBOX MODE ENGAGED</b>\n\nAir-gap verified. Zero kinetic hooks. What's on your mind?`, { parse_mode: 'HTML' });
+            return;
+        }
+
+        if (data === 'mode_tactical') {
+            sessionStates.set(chatId, { mode: 'SOC_TACTICAL', authState: 'PENDING_PIN' });
+            await ctx.editMessageText(`🔴 <b>SOC TACTICAL SELECTED</b>\n\nProvide Secondary Authorization PIN:`, { parse_mode: 'HTML' });
+            return;
+        }
+
         if (data.startsWith('confirm_block_')) {
             const ip = data.replace('confirm_block_', '');
             try {
@@ -215,6 +266,26 @@ const setupCommands = (bot) => {
             }
         } else if (data === 'evolution_defer') {
             await ctx.editMessageText('⏳ Evolution deferred. I will ask again when conditions are still met.');
+        } else if (data.endsWith('_dynamic') && data.startsWith('approve_')) {
+            const alertId = data.replace('approve_', '').replace('_dynamic', '');
+            await ctx.editMessageText(`⚡ <b>DYNAMIC PLAYBOOK EXECUTING</b>\n\nAlert <code>${escapeHTML(alertId)}</code> mitigation in progress. Monitor logs for completion status.`, { parse_mode: 'HTML' });
+            try {
+                const { Connection, Client } = require('@temporalio/client');
+                const connection = await Connection.connect();
+                const client = new Client({ connection });
+                await client.workflow.start('pentestPipeline', {
+                    taskQueue: 'bayezid-ir',
+                    workflowId: `dynamic-playbook-${alertId}-${Date.now()}`,
+                    args: [{
+                        alertId: alertId,
+                        initialPayload: { trigger: 'telegram_dynamic_playbook' },
+                        sourceIp: '127.0.0.1', 
+                        targetAsset: 'telegram_operator'
+                    }]
+                });
+            } catch (err) {
+                await ctx.reply(`❌ Failed to trigger dynamic playbook workflow: ${err.message}`);
+            }
         }
         try { await ctx.answerCbQuery(); } catch (e) {  }
     });

@@ -138,6 +138,8 @@ const _generateRiskCheck = (name, syscall) => {
         default:
             return `    evt->action = 0; 
     }
+}`;
+    }
 };
 class MnemonProbeManager {
     constructor() {

