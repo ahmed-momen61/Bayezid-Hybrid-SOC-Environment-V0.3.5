@@ -294,7 +294,7 @@ SWARM_NODES="http://localhost:3000"
 
 # Operational Mode Settings
 BAYEZID_EXECUTION_MODE=SIMULATED  # SIMULATED = safe synthetic telemetry; LIVE_FIRE = real execution
-BAYEZID_ROE_TOKEN=b4y3z1d_k1n3t1c_0v3rr1d3_99x  # RoE token override for live-fire activation
+BAYEZID_ROE_TOKEN=XXXXXXXXXXXXXX # RoE token override for live-fire activation
 BAYEZID_COGNITIVE_MODE=CLOUD_WATERFALL  # CLOUD_WATERFALL = LLM cascade; AUTONOMOUS_NEURAL = Local air-gapped ML
 BAYEZID_EBPF_MODE=monitor  # monitor = XDP_PASS telemetry; enforce = kernel-level drops
 ```
