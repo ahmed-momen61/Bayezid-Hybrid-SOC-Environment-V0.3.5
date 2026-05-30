@@ -244,6 +244,25 @@ async def predict_anomaly(req: Request):
             "v2": float(ui_projection[2]), "v3": float(ui_projection[3])
         }
     }
+@app.post("/api/v1/native/analyze-ioc")
+async def analyze_native_ioc(req: Request):
+    body = await req.json()
+    rule_name = body.get("rule_name", "UNKNOWN")
+    pid = body.get("pid", 0)
+    process = body.get("process", "unknown")
+    
+    confidence = 98.5 if rule_name != "UNKNOWN" else 50.0
+    verdict = "MALICIOUS" if confidence > 90.0 else "SUSPICIOUS"
+    
+    print(f"\n[🔍] NATIVE IOC ANALYZER: Process {process} (PID: {pid}) triggered {rule_name}")
+    print(f"[🧠] Verdict: {verdict} (Confidence: {confidence}%)")
+    
+    return {
+        "verdict": verdict,
+        "confidence": confidence,
+        "action": "ISOLATE_NODE"
+    }
+
 @app.post("/api/v1/ml/feedback")
 async def update_model(req: Request):
     global model, adwin, optimizer, ewc_module

@@ -232,19 +232,67 @@ const supervisionTick = async () => {
     }
 };
 let supervisionInterval = null;
+let zmqSubscriber = null;
+
 const startSupervision = () => {
     for (const agent of KNOWN_AGENTS) {
         agentHealthMap.set(agent, initAgentHealth(agent));
     }
     supervisionInterval = setInterval(supervisionTick, SUPERVISION_INTERVAL_MS);
     console.log(`[🔧] Wingman Overseer: Agent supervision active (tick every ${SUPERVISION_INTERVAL_MS / 1000}s).`);
+    
+    // Bind to the ZMQ spine for autonomous incident response
+    const zmq = require('zeromq');
+    zmqSubscriber = new zmq.Subscriber();
+    zmqSubscriber.connect('tcp://127.0.0.1:5555');
+    zmqSubscriber.subscribe('GNN_PREDICTION');
+    
+    console.log(`[👁️] Wingman Overlord: Bound to ZeroMQ spine. Listening for lateral movement telemetry...`);
+    
+    (async () => {
+        for await (const [topic, msg] of zmqSubscriber) {
+            try {
+                const payload = JSON.parse(msg.toString());
+                if (payload.probability > 0.90) {
+                    console.log(`\n[🚨] WINGMAN OVERLORD: CRITICAL LATERAL MOVEMENT PREDICTED (>90%)`);
+                    console.log(`[🚨] Target: ${payload.targetIp}`);
+                    console.log(`[🚨] Initiating Autonomous Incident Response...`);
+                    
+                    // Trigger native isolation via PUB socket to native sensors
+                    const zmqPublisher = new zmq.Publisher();
+                    await zmqPublisher.bind('tcp://127.0.0.1:5556'); // Using bind instead of connect since we are the orchestrator
+                    
+                    const blockPayload = { ip: payload.targetIp, source: "WINGMAN_OVERLORD" };
+                    await zmqPublisher.send(['BLOCK_IP', JSON.stringify(blockPayload)]);
+                    
+                    console.log(`[🛑] WINGMAN OVERLORD: Broadcasted BLOCK_IP command to Native Swarm for ${payload.targetIp}`);
+                    
+                    // Publish to memory service for Veritas Audit
+                    await publishLiveEvent('bayezid_tactical_feed', 'AUTONOMOUS_ISOLATION', {
+                        target: payload.targetIp,
+                        probability: payload.probability,
+                        action: "NATIVE_WFP_XDP_BLOCK"
+                    });
+                    
+                    zmqPublisher.close();
+                }
+            } catch (e) {
+                console.error(`[⚠️] Wingman Overlord: Failed to process ZMQ message: ${e.message}`);
+            }
+        }
+    })();
 };
+
 const stopSupervision = () => {
     if (supervisionInterval) {
         clearInterval(supervisionInterval);
         supervisionInterval = null;
     }
+    if (zmqSubscriber) {
+        zmqSubscriber.close();
+    }
 };
+
 const getAgentHealthMap = () => {
     const result = {};
     for (const [name, health] of agentHealthMap) {
@@ -252,6 +300,7 @@ const getAgentHealthMap = () => {
     }
     return result;
 };
+
 module.exports = {
     startSupervision,
     stopSupervision,

@@ -14,7 +14,7 @@ const run = (cmd) => {
 const main = () => {
     const isWindows = os.platform() === 'win32';
     const circomBin = isWindows ? path.join(__dirname, 'bin', 'circom.exe') : path.join(__dirname, 'bin', 'circom');
-    const snarkjsBin = isWindows ? path.join(__dirname, 'node_modules', '.bin', 'snarkjs.cmd') : path.join(__dirname, 'node_modules', '.bin', 'snarkjs');
+    const snarkjsBin = isWindows ? path.join(__dirname, '../../node_modules', '.bin', 'snarkjs.cmd') : path.join(__dirname, '../../node_modules', '.bin', 'snarkjs');
     if (!fs.existsSync(path.join(__dirname, 'circuits'))) {
         fs.mkdirSync(path.join(__dirname, 'circuits'), { recursive: true });
     }

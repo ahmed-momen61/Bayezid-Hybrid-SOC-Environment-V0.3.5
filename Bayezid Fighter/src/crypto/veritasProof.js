@@ -111,20 +111,25 @@ class VeritasAuditChain {
         this.chain.push(block);
         const operatorIdStr = context.operator || 'system';
         const roeTokenSecretStr = context.roeTokenSecret || 'no-token';
-        const decisionPlaintext = toPoseidonHash(JSON.stringify(decisionData));
-        const operatorId = toPoseidonHash(operatorIdStr);
-        const roeTokenSecret = toPoseidonHash(roeTokenSecretStr);
+        
+        // Use an integer representation for plaintext inputs to the circuit
+        const decisionPlaintextInt = BigInt('0x' + crypto.createHash('sha256').update(JSON.stringify(decisionData)).digest('hex').substring(0, 31)).toString();
+        const operatorIdInt = BigInt('0x' + crypto.createHash('sha256').update(operatorIdStr).digest('hex').substring(0, 31)).toString();
+        const roeTokenSecretInt = BigInt('0x' + crypto.createHash('sha256').update(roeTokenSecretStr).digest('hex').substring(0, 31)).toString();
+
         const F = poseidon ? poseidon.F : null;
         let decisionHash = "0", operatorIdHash = "0", targetScopeHash = "0";
+
         if (poseidon) {
-            decisionHash = F.toString(poseidon([BigInt(decisionPlaintext)]));
-            operatorIdHash = F.toString(poseidon([BigInt(operatorId)]));
-            targetScopeHash = F.toString(poseidon([BigInt(roeTokenSecret), BigInt(operatorId)]));
+            decisionHash = F.toString(poseidon([BigInt(decisionPlaintextInt)]));
+            operatorIdHash = F.toString(poseidon([BigInt(operatorIdInt)]));
+            targetScopeHash = F.toString(poseidon([BigInt(roeTokenSecretInt), BigInt(operatorIdInt)]));
         }
+
         const witnessInputs = {
-            decisionPlaintext,
-            operatorId,
-            roeTokenSecret,
+            decisionPlaintext: decisionPlaintextInt,
+            operatorId: operatorIdInt,
+            roeTokenSecret: roeTokenSecretInt,
             decisionHash,
             operatorIdHash,
             targetScopeHash

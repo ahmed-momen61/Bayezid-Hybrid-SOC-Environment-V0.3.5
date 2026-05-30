@@ -50,7 +50,7 @@ const startSigmaSymbioticLoop = async() => {
     console.log(`[🧬] Symbiotic Sandbox-to-Matrix Reinforcement Learning`);
     console.log(`======================================================\n`);
     const sandboxDir = path.join(__dirname, 'sandbox');
-    const pythonScript = path.join(__dirname, 'ml_engine', 'sigma_ppo.py');
+    const pythonScript = path.join(__dirname, '../../ml_engine', 'sigma_ppo.py');
     try {
         console.log(`[📦] 1. Starting Lightweight Docker Sandbox...`);
         try {

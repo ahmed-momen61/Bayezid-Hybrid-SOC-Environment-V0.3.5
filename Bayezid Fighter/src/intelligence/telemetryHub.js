@@ -38,6 +38,19 @@ const initializeDB = () => {
             modifier TEXT,
             details TEXT
         )`);
+        db.run(`CREATE TABLE IF NOT EXISTS native_sensor_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            topic TEXT,
+            source_ip TEXT,
+            pid INTEGER,
+            process TEXT,
+            action TEXT,
+            reason TEXT,
+            sensor TEXT,
+            os TEXT,
+            raw_json TEXT
+        )`);
     });
 };
 
@@ -72,6 +85,20 @@ const emitTelemetry = (category, payload) => {
             modifier: payload.modifier,
             details: safeDetails
         });
+    } else if (category === 'NATIVE') {
+        logBuffer.push({
+            category,
+            timestamp,
+            topic: payload.topic || 'UNKNOWN',
+            source_ip: payload.source_ip || '',
+            pid: payload.pid || 0,
+            process: payload.process || '',
+            action: payload.action || '',
+            reason: payload.reason || '',
+            sensor: payload.sensor || '',
+            os: payload.os || '',
+            raw_json: safeDetails
+        });
     }
 };
 
@@ -84,6 +111,7 @@ const processBuffer = () => {
         const tacticalItems = batch.filter(item => item.category === 'TACTICAL');
         const adversarialItems = batch.filter(item => item.category === 'ADVERSARIAL');
         const strategicItems = batch.filter(item => item.category === 'STRATEGIC');
+        const nativeItems = batch.filter(item => item.category === 'NATIVE');
 
         if (tacticalItems.length > 0) {
             const stmt = db.prepare(`INSERT INTO tactical_log (timestamp, event, node, details) VALUES (?, ?, ?, ?)`);
@@ -108,6 +136,14 @@ const processBuffer = () => {
             });
             stmt.finalize();
         }
+
+        if (nativeItems.length > 0) {
+            const stmt = db.prepare(`INSERT INTO native_sensor_log (timestamp, topic, source_ip, pid, process, action, reason, sensor, os, raw_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+            nativeItems.forEach(item => {
+                stmt.run(item.timestamp, item.topic, item.source_ip, item.pid, item.process, item.action, item.reason, item.sensor, item.os, item.raw_json);
+            });
+            stmt.finalize();
+        }
     });
 };
 
@@ -119,6 +155,7 @@ const clearDB = () => {
             db.run(`DELETE FROM tactical_log`);
             db.run(`DELETE FROM adversarial_log`);
             db.run(`DELETE FROM strategic_log`);
+            db.run(`DELETE FROM native_sensor_log`);
             resolve();
         });
     });

@@ -44,7 +44,8 @@
         "strip-comments": "^2.0.1",
         "telegraf": "^4.16.3",
         "ts-node": "^10.9.2",
-        "typescript": "^6.0.3"
+        "typescript": "^6.0.3",
+        "zeromq": "^6.5.0"
     },
     "devDependencies": {
         "prisma": "^6.19.3"

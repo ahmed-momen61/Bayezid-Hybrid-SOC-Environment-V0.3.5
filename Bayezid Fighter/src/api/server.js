@@ -59,6 +59,8 @@ const { shadowMirror } = require('../network/shadowMirror');
 const { veritasChain } = require('../crypto/veritasProof');
 const { federationAggregator } = require('../network/federationSwarm');
 const { dataHarvester, loraManager } = require('../core_ai/bayezidBrain');
+const { startNativeSensors, stopNativeSensors } = require('../core_ai/nativeSensorManager');
+const { startNativeTelemetryBridge, stopNativeTelemetryBridge } = require('../intelligence/nativeTelemetryBridge');
 const encryptEvidence = (text) => {
     let iv = crypto.randomBytes(IV_LENGTH);
     let keyBuffer = Buffer.from(ENCRYPTION_KEY, 'hex');
@@ -901,6 +903,10 @@ const startBayezidServer = () => {
         console.log(`=================================\n`);
         if (typeof loadMitreDatabase === 'function' && global.BAYEZID_MODE === 'BLUE') {
             await loadMitreDatabase();
+        }
+        if (global.BAYEZID_MODE === 'BLUE') {
+            startNativeSensors();
+            startNativeTelemetryBridge();
         }
         startEscalationWatcher();
         console.log(`[⏱️] SLA Escalation Watcher Active (${liveConfig.SLA_TIMEOUT_MINUTES} min timeout)`);
@@ -1781,6 +1787,8 @@ process.on('SIGINT', () => {
     try {
         const { stopCausalEngine } = require('../core_ai/pythonManager');
         stopCausalEngine();
+        stopNativeSensors();
+        stopNativeTelemetryBridge();
     } catch (e) {}
     process.exit(0);
 });
