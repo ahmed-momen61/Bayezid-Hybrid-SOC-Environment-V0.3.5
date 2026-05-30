@@ -1,11 +1,11 @@
+import warnings
+warnings.filterwarnings('ignore')
 import pandas as pd
 from pgmpy.models import BayesianNetwork
 from pgmpy.inference import CausalInference
 from pgmpy.estimators import PC
 from fastapi import FastAPI, Request
 import uvicorn
-import warnings
-warnings.filterwarnings('ignore')
 app = FastAPI()
 @app.post("/api/v1/causal/build-dag")
 async def build_dag(req: Request):

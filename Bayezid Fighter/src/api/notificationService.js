@@ -48,4 +48,26 @@ ${alertData.recommended_action}
         console.error('[-] Failed to send Telegram alert:', error.message);
     }
 };
-module.exports = { sendTelegramAlert };
+const wsBuffer = [];
+let io = null;
+
+const broadcastAlert = (alertData) => {
+    wsBuffer.push(alertData);
+};
+
+const initWsBatching = (ioInstance) => {
+    io = ioInstance;
+    setInterval(() => {
+        if (wsBuffer.length > 0) {
+            const batch = wsBuffer.splice(0, wsBuffer.length);
+            io.emit('batch_update', batch);
+            console.log(`[🔌] Broadcasted batch of ${batch.length} alerts to WebSocket clients.`);
+        }
+    }, 1000);
+};
+
+module.exports = {
+    sendTelegramAlert,
+    broadcastAlert,
+    initWsBatching
+};

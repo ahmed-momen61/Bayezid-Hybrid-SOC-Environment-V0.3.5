@@ -1,7 +1,19 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
-const dbPath = path.join(__dirname, '../../data/telemetry.db');
+const fs = require('fs');
+
+const dataDir = path.join(__dirname, '../../data');
+if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+}
+
+const dbPath = path.join(dataDir, 'telemetry.db');
 const db = new sqlite3.Database(dbPath);
+
+const FLUSH_INTERVAL_MS = 500;
+const logBuffer = [];
+let flushTimer = null;
+
 const initializeDB = () => {
     db.serialize(() => {
         db.run(`CREATE TABLE IF NOT EXISTS tactical_log (
@@ -28,24 +40,79 @@ const initializeDB = () => {
         )`);
     });
 };
+
 initializeDB();
+
 const emitTelemetry = (category, payload) => {
     const timestamp = new Date().toISOString();
     const safeDetails = payload.details ? JSON.stringify(payload.details) : '{}';
+
     if (category === 'TACTICAL') {
-        const stmt = db.prepare(`INSERT INTO tactical_log (timestamp, event, node, details) VALUES (?, ?, ?, ?)`);
-        stmt.run(timestamp, payload.event, payload.node || 'unknown', safeDetails);
-        stmt.finalize();
+        logBuffer.push({
+            category,
+            timestamp,
+            event: payload.event,
+            node: payload.node || 'unknown',
+            details: safeDetails
+        });
     } else if (category === 'ADVERSARIAL') {
-        const stmt = db.prepare(`INSERT INTO adversarial_log (timestamp, action, agent, success, details) VALUES (?, ?, ?, ?, ?)`);
-        stmt.run(timestamp, payload.action, payload.agent || 'unknown', payload.success ? 1 : 0, safeDetails);
-        stmt.finalize();
+        logBuffer.push({
+            category,
+            timestamp,
+            action: payload.action,
+            agent: payload.agent || 'unknown',
+            success: payload.success ? 1 : 0,
+            details: safeDetails
+        });
     } else if (category === 'STRATEGIC') {
-        const stmt = db.prepare(`INSERT INTO strategic_log (timestamp, trigger, modifier, details) VALUES (?, ?, ?, ?)`);
-        stmt.run(timestamp, payload.trigger, payload.modifier, safeDetails);
-        stmt.finalize();
+        logBuffer.push({
+            category,
+            timestamp,
+            trigger: payload.trigger,
+            modifier: payload.modifier,
+            details: safeDetails
+        });
     }
 };
+
+const processBuffer = () => {
+    if (logBuffer.length === 0) return;
+
+    const batch = logBuffer.splice(0, logBuffer.length);
+
+    db.serialize(() => {
+        const tacticalItems = batch.filter(item => item.category === 'TACTICAL');
+        const adversarialItems = batch.filter(item => item.category === 'ADVERSARIAL');
+        const strategicItems = batch.filter(item => item.category === 'STRATEGIC');
+
+        if (tacticalItems.length > 0) {
+            const stmt = db.prepare(`INSERT INTO tactical_log (timestamp, event, node, details) VALUES (?, ?, ?, ?)`);
+            tacticalItems.forEach(item => {
+                stmt.run(item.timestamp, item.event, item.node, item.details);
+            });
+            stmt.finalize();
+        }
+
+        if (adversarialItems.length > 0) {
+            const stmt = db.prepare(`INSERT INTO adversarial_log (timestamp, action, agent, success, details) VALUES (?, ?, ?, ?, ?)`);
+            adversarialItems.forEach(item => {
+                stmt.run(item.timestamp, item.action, item.agent, item.success, item.details);
+            });
+            stmt.finalize();
+        }
+
+        if (strategicItems.length > 0) {
+            const stmt = db.prepare(`INSERT INTO strategic_log (timestamp, trigger, modifier, details) VALUES (?, ?, ?, ?)`);
+            strategicItems.forEach(item => {
+                stmt.run(item.timestamp, item.trigger, item.modifier, item.details);
+            });
+            stmt.finalize();
+        }
+    });
+};
+
+flushTimer = setInterval(processBuffer, FLUSH_INTERVAL_MS);
+
 const clearDB = () => {
     return new Promise((resolve) => {
         db.serialize(() => {
@@ -56,7 +123,25 @@ const clearDB = () => {
         });
     });
 };
+
+const flushAndClose = () => {
+    return new Promise((resolve) => {
+        if (flushTimer) {
+            clearInterval(flushTimer);
+            flushTimer = null;
+        }
+        processBuffer();
+        db.close((err) => {
+            if (err) {
+                console.error('[-] Telemetry DB close error:', err.message);
+            }
+            resolve();
+        });
+    });
+};
+
 module.exports = {
     emitTelemetry,
-    clearDB
+    clearDB,
+    flushAndClose
 };

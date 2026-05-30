@@ -1,11 +1,14 @@
 const { Telegraf } = require('telegraf');
-const { processMessage } = require('./wingmanService');
+const { processMessage, callLLM } = require('./wingmanService');
 const axios = require('axios');
+const { initializeGuest, saveGuestMessage, updateGuestPreference, buildGuestPrompt } = require('../memory_systems/guestMemoryManager');
+
 const TELEGRAM_BOT_TOKEN = process.env.WINGMAN_TELEGRAM_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.WINGMAN_TELEGRAM_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
 let bot = null;
 let botActive = false;
 const MAX_TELEGRAM_MSG = 4000;
+const authenticatedAdmins = new Set();
 const splitMessage = (text) => {
     if (text.length <= MAX_TELEGRAM_MSG) return [text];
     const chunks = [];
@@ -26,12 +29,75 @@ const escapeHTML = (text) => {
 };
 const setupCommands = (bot) => {
     bot.use(async (ctx, next) => {
-        const adminChatId = process.env.WINGMAN_TELEGRAM_CHAT_ID || process.env.TELEGRAM_CHAT_ID;
-        if (ctx.chat && ctx.chat.id.toString() !== adminChatId) {
-            console.log(`[⚠️] Unauthorized access attempt from Chat ID: ${ctx.chat.id}`);
-            return;
+        if (!ctx.from) return;
+        
+        const userId = ctx.from.id.toString();
+        const isAdminId = userId === process.env.TELEGRAM_ADMIN_ID;
+        
+        if (isAdminId) {
+            const text = ctx.message && ctx.message.text ? ctx.message.text.trim() : '';
+            if (text.startsWith('/auth')) {
+                const pin = text.split(' ')[1];
+                if (pin && pin === process.env.TELEGRAM_SOC_PIN) {
+                    authenticatedAdmins.add(userId);
+                    return await ctx.reply("SOC Authorization Granted 🛡️");
+                } else {
+                    return await ctx.reply("Session locked. Please use /auth <PIN>");
+                }
+            }
+            
+            if (!authenticatedAdmins.has(userId)) {
+                return await ctx.reply("Session locked. Please use /auth <PIN>");
+            }
+            
+            return next();
+        } else {
+            if (!ctx.message || !ctx.message.text) return;
+            const text = ctx.message.text.trim();
+            
+            try {
+                await initializeGuest(userId, ctx.from.username || 'unknown');
+                
+                if (text.startsWith('/nickname')) {
+                    const name = text.split(' ').slice(1).join(' ').trim();
+                    if (!name) return await ctx.reply("Usage: /nickname <name>");
+                    await updateGuestPreference(userId, 'nickname', name);
+                    return await ctx.reply(`Nickname updated to: ${name}`);
+                }
+                
+                if (text.startsWith('/persona')) {
+                    const persona = text.split(' ').slice(1).join(' ').trim();
+                    if (!persona) return await ctx.reply("Usage: /persona <role>");
+                    await updateGuestPreference(userId, 'persona', persona);
+                    return await ctx.reply(`Persona updated to: ${persona}`);
+                }
+
+                if (text.startsWith('/start')) {
+                    return await ctx.reply(
+                        `🟢 Welcome to the Wingman Sandbox.\n\n` +
+                        `Here you can consult with me about cybersecurity, code, or anything else under a strict air-gap boundary.\n\n` +
+                        `Commands:\n` +
+                        `/nickname <name> - Change how I call you\n` +
+                        `/persona <role> - Customize my roleplay persona\n` +
+                        `/start - Show this help message`
+                    );
+                }
+                
+                await saveGuestMessage(userId, 'user', text);
+                const messages = await buildGuestPrompt(userId, text);
+                
+                const responseText = await callLLM(messages);
+                await saveGuestMessage(userId, 'assistant', responseText);
+                
+                const chunks = splitMessage(responseText);
+                for (const chunk of chunks) {
+                    await ctx.reply(chunk);
+                }
+            } catch (err) {
+                console.error(`[⚠️ Guest Sandbox Error]`, err.message);
+                await ctx.reply(`⚠️ Sandbox error: ${err.message}`);
+            }
         }
-        return next();
     });
     // --- DUAL GATEWAY STATE MANAGEMENT ---
     const sessionStates = new Map(); // chat_id -> { mode: 'SANDBOX' | 'SOC_TACTICAL', authState: 'PENDING_PIN' | 'AUTHENTICATED' | null }
@@ -188,6 +254,12 @@ const setupCommands = (bot) => {
         await dispatchAsync(ctx, message, sessionId, executionMode);
     });
     bot.on('callback_query', async (ctx) => {
+        const userId = ctx.from ? ctx.from.id.toString() : '';
+        const isAdmin = userId === process.env.TELEGRAM_ADMIN_ID;
+        if (!isAdmin || !authenticatedAdmins.has(userId)) {
+            try { await ctx.answerCbQuery("⛔ Access Denied: SOC Authorization Required.", { show_alert: true }); } catch (e) {}
+            return;
+        }
         const data = ctx.callbackQuery.data;
         const chatId = ctx.chat.id.toString();
 

@@ -6,13 +6,13 @@ const cors = require('cors');
 const readline = require('readline');
 const dotenv = require('dotenv');
 dotenv.config();
-const { PrismaClient } = require('@prisma/client');
+// PrismaClient import removed (uses shared client below)
 const path = require('path');
 const { processTuningCommand, liveConfig } = require('../core_ai/tuningService');
 const { smartExec, analyzeWithVertexAI, analyzeWithLocalModel, runScoutAgent, runBreacherAgent, runPhantomAgent, runChameleonAgent, runOverlordAgent, runScribeAgent, runActionAgent, bridgeRedToBlue, applyFixAndVerify, runStealthScribeAgent, runVetoAgent, runShadowRouterAgent, runForensicRCAAgent, executeAlchemistFuzzingLoop, runMirageAgent, runWardenSandbox, runZeroDayForgeAgent } = require('../core_ai/aiService');
 const { executePlaybook } = require('../cti/playbookService');
 const { enrichWithOSINT } = require('../cti/osintService');
-const { sendTelegramAlert } = require('./notificationService');
+const { sendTelegramAlert, broadcastAlert, initWsBatching } = require('./notificationService');
 const { loadMitreDatabase } = require('../cti/ragService');
 const { enrichWithCTI } = require('../cti/ctiService');
 const { findSimilarIncidents, saveIncidentToMemory } = require('../memory_systems/memoryService');
@@ -73,7 +73,7 @@ const encryptEvidence = (text) => {
 const hashEvidence = (text) => {
     return crypto.createHash('sha256').update(text).digest('hex');
 }
-const prisma = new PrismaClient();
+const prisma = require('./prismaClient');
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -157,6 +157,7 @@ const io = new Server(httpServer, {
     }
 });
 global.io = io;
+initWsBatching(io);
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/api/v1/alerts', async(req, res) => {
     try {
@@ -360,7 +361,7 @@ const handleSecurityAlert = async(req, res) => {
                 osintData: JSON.stringify({ osint: osintData, cti: ctiData }),
                 createdAt: savedAlert.createdAt || new Date().toISOString()
             };
-            global.io.emit('new_alert', formattedAlert);
+            broadcastAlert(formattedAlert);
         }
         return res.status(200).json({
             status: 'success',
@@ -908,6 +909,24 @@ const startBayezidServer = () => {
             startMatrixShell(2222);
             startMatrixShell(8080);
             console.log(`[⚡] Bayezid Intelligence Matrix is LIVE and Lethal.`);
+        }
+        try {
+            const { spawnCausalEngine } = require('../core_ai/pythonManager');
+            spawnCausalEngine();
+        } catch (e) {
+            console.log(`[⚠️] Python Causal Engine failed to start: ${e.message}`);
+        }
+        try {
+            const { startLinuxTelemetryDaemon } = require('../intelligence/linuxTelemetryDaemon');
+            startLinuxTelemetryDaemon();
+        } catch (e) {
+            console.log(`[⚠️] Linux Telemetry Daemon failed to start: ${e.message}`);
+        }
+        try {
+            const { initCollection } = require('../memory_systems/chromaService');
+            initCollection();
+        } catch (e) {
+            console.log(`[⚠️] ChromaDB initialization failed: ${e.message}`);
         }
         try {
             const { startTelegramBot } = require('../core_ai/wingmanTelegram');
@@ -1759,6 +1778,10 @@ app.get('/api/v2/brain/data-quality', async(req, res) => {
 process.on('SIGINT', () => {
     console.log('\n[🛑] Graceful Shutdown Initiated...');
     console.log('[🧹] Cleaning up background processes...');
+    try {
+        const { stopCausalEngine } = require('../core_ai/pythonManager');
+        stopCausalEngine();
+    } catch (e) {}
     process.exit(0);
 });
 process.on('unhandledRejection', (reason, promise) => {

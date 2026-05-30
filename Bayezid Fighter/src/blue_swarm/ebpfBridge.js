@@ -1,12 +1,36 @@
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 const util = require('util');
 const execPromise = util.promisify(exec);
+
+const ipToUint32BE = (ipString) => {
+    const parts = ipString.split('.');
+    if (parts.length !== 4) throw new Error('Invalid IPv4 address');
+    const buffer = Buffer.alloc(4);
+    for (let i = 0; i < 4; i++) {
+        buffer.writeUInt8(parseInt(parts[i], 10), i);
+    }
+    return buffer.readUInt32BE(0);
+};
+
+const spawnPromise = (cmd, args) => new Promise((resolve, reject) => {
+    const child = spawn(cmd, args);
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', d => stdout += d);
+    child.stderr.on('data', d => stderr += d);
+    child.on('close', code => {
+        if (code === 0) resolve({ stdout, stderr });
+        else reject(new Error(stderr.trim() || `Process exited with code ${code}`));
+    });
+});
+
 class eBPFBridge {
     constructor(basePath = '/sys/fs/bpf/bayezid') {
         this.basePath = basePath;
         this.blocklistMap = `${this.basePath}/bayezid_blocklist`;
         this.weightsMap = `${this.basePath}/bayezid_neural_weights`;
         this.modeMap = `${this.basePath}/bayezid_ebpf_mode`;
+        this.ratelimitMap = `${this.basePath}/bayezid_ratelimit`;
     }
     _ipToHex(ipStr) {
         const parts = ipStr.split('.');
@@ -57,5 +81,42 @@ class eBPFBridge {
             console.error(`[eBPF Bridge] Failed to update weights: ${e.message}`);
         }
     }
+    async setRateLimit(ipAddress, packetsPerSecond) {
+        try {
+            const keyHexBytes = ipAddress.split('.').map(p => parseInt(p, 10).toString(16).padStart(2, '0'));
+            const valBuffer = Buffer.alloc(4);
+            valBuffer.writeUInt32LE(packetsPerSecond, 0);
+            const valParts = valBuffer.toString('hex').match(/../g);
+
+            const spawnArgs = [
+                'map', 'update', 'pinned', this.ratelimitMap,
+                'key', 'hex', ...keyHexBytes,
+                'value', 'hex', ...valParts
+            ];
+
+            await spawnPromise('sudo', ['bpftool', ...spawnArgs]);
+            console.log(`[eBPF Bridge] Rate limit of ${packetsPerSecond} pps set for IP ${ipAddress}.`);
+        } catch (e) {
+            console.error(`[eBPF Bridge] Failed to set rate limit for ${ipAddress}: ${e.message}`);
+        }
+    }
+    async removeRateLimit(ipAddress) {
+        try {
+            const keyHexBytes = ipAddress.split('.').map(p => parseInt(p, 10).toString(16).padStart(2, '0'));
+            const spawnArgs = [
+                'map', 'delete', 'pinned', this.ratelimitMap,
+                'key', 'hex', ...keyHexBytes
+            ];
+
+            await spawnPromise('sudo', ['bpftool', ...spawnArgs]);
+            console.log(`[eBPF Bridge] Rate limit removed for IP ${ipAddress}.`);
+        } catch (e) {
+            console.error(`[eBPF Bridge] Failed to remove rate limit for ${ipAddress}: ${e.message}`);
+        }
+    }
 }
-module.exports = new eBPFBridge();
+
+const instance = new eBPFBridge();
+instance.ipToUint32BE = ipToUint32BE;
+
+module.exports = instance;

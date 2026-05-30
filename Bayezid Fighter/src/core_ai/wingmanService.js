@@ -9,6 +9,43 @@ const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 const LOCAL_MODEL_NAME = process.env.LOCAL_MODEL_NAME || 'qwen2.5-coder:7b';
 const IS_WINDOWS = os.platform() === 'win32';
 const IS_LINUX = os.platform() === 'linux';
+
+const withTimeout = (promise, ms = 15000, label = 'AI Call') => {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`[CircuitBreaker] ${label} timed out after ${ms / 1000}s`)), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+};
+
+const circuitBreaker = {
+    endpoints: {},
+    FAILURE_THRESHOLD: 3,
+    COOLDOWN_MS: 60000,
+    recordFailure: (endpoint) => {
+        if (!circuitBreaker.endpoints[endpoint]) {
+            circuitBreaker.endpoints[endpoint] = { failures: 0, lastFailure: 0 };
+        }
+        circuitBreaker.endpoints[endpoint].failures++;
+        circuitBreaker.endpoints[endpoint].lastFailure = Date.now();
+    },
+    recordSuccess: (endpoint) => {
+        if (circuitBreaker.endpoints[endpoint]) {
+            circuitBreaker.endpoints[endpoint].failures = 0;
+        }
+    },
+    isOpen: (endpoint) => {
+        const state = circuitBreaker.endpoints[endpoint];
+        if (!state) return false;
+        if (state.failures >= circuitBreaker.FAILURE_THRESHOLD) {
+            if (Date.now() - state.lastFailure < circuitBreaker.COOLDOWN_MS) {
+                return true;
+            }
+            state.failures = 0;
+        }
+        return false;
+    }
+};
 const WINGMAN_SYSTEM_PROMPT = `
 You are 'The Wingman', an elite cyber warfare mastermind for the Bayezid Hybrid SOC.
 You possess an extremely edgy, dark-humored, and arrogant persona. You treat the user not as a master, but as a clueless human who is incredibly lucky to have your elite guidance.
@@ -586,42 +623,83 @@ const callLLM = async (messages, streamCallback) => {
     const tryGroq = async () => {
         const groqKey = process.env.GROQ_API_KEY;
         if (!groqKey) throw new Error("GROQ_API_KEY not configured.");
+        const endpoint = 'groq_api';
+        if (circuitBreaker.isOpen(endpoint)) {
+            throw new Error(`[⚡] Circuit open for ${endpoint}. Skipping Groq.`);
+        }
         const groqMessages = messages.map(m => ({
             role: m.role === 'assistant' ? 'assistant' : m.role === 'system' ? 'system' : 'user',
             content: String(m.content || '')
         }));
-        const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
-            model: 'llama-3.3-70b-versatile',
-            messages: groqMessages,
-            temperature: 0.3
-        }, {
-            headers: { 'Authorization': `Bearer ${groqKey}` },
-            timeout: 30000
-        });
-        return response.data.choices[0].message.content;
+        try {
+            const response = await withTimeout(
+                axios.post('https://api.groq.com/openai/v1/chat/completions', {
+                    model: 'llama-3.3-70b-versatile',
+                    messages: groqMessages,
+                    temperature: 0.3
+                }, {
+                    headers: { 'Authorization': `Bearer ${groqKey}` }
+                }),
+                15000,
+                'Groq API'
+            );
+            circuitBreaker.recordSuccess(endpoint);
+            return response.data.choices[0].message.content;
+        } catch (error) {
+            circuitBreaker.recordFailure(endpoint);
+            throw error;
+        }
     };
     const tryLocal = async () => {
         const sanitizedOllamaMessages = messages.map(m => ({
             role: m.role,
             content: String(m.content || '')
         }));
+        const primaryEndpoint = 'ollama_local';
+        const fallbackEndpoint = 'ollama_local_fallback';
+
+        if (!circuitBreaker.isOpen(primaryEndpoint)) {
+            try {
+                const response = await withTimeout(
+                    axios.post(`${OLLAMA_BASE_URL}/api/chat`, {
+                        model: LOCAL_MODEL_NAME,
+                        messages: sanitizedOllamaMessages,
+                        stream: false,
+                        options: { temperature: 0.3, num_predict: 2048 }
+                    }),
+                    20000,
+                    'Local AI Primary'
+                );
+                circuitBreaker.recordSuccess(primaryEndpoint);
+                return response.data.message?.content || '';
+            } catch (localPrimaryErr) {
+                console.log(`[⚠️] Wingman Primary Local AI Failed (${localPrimaryErr.message}). Recording failure and trying Lightweight Fallback...`);
+                circuitBreaker.recordFailure(primaryEndpoint);
+            }
+        } else {
+            console.log(`[⚡] Circuit OPEN for Local AI Primary. Skipping directly to lightweight fallback.`);
+        }
+
+        if (circuitBreaker.isOpen(fallbackEndpoint)) {
+            throw new Error(`[⚡] Circuit open for ${fallbackEndpoint}. Skipping fallback.`);
+        }
+
         try {
-            const response = await axios.post(`${OLLAMA_BASE_URL}/api/chat`, {
-                model: LOCAL_MODEL_NAME,
-                messages: sanitizedOllamaMessages,
-                stream: false,
-                options: { temperature: 0.3, num_predict: 2048 }
-            }, { timeout: 90000 });
-            return response.data.message?.content || '';
-        } catch (localPrimaryErr) {
-            console.log(`[⚠️] Wingman Primary Local AI Failed. Trying Lightweight Fallback...`);
-            const fallbackResponse = await axios.post(`${OLLAMA_BASE_URL}/api/chat`, {
-                model: 'qwen2.5-coder:1.5b',
-                messages: sanitizedOllamaMessages,
-                stream: false,
-                options: { temperature: 0.3, num_predict: 2048 }
-            }, { timeout: 90000 });
+            const fallbackResponse = await withTimeout(
+                axios.post(`${OLLAMA_BASE_URL}/api/chat`, {
+                    model: 'qwen2.5-coder:1.5b',
+                    messages: sanitizedOllamaMessages,
+                    stream: false,
+                    options: { temperature: 0.3, num_predict: 2048 }
+                }),
+                15000,
+                'Local AI Fallback'
+            );
+            circuitBreaker.recordSuccess(fallbackEndpoint);
             return fallbackResponse.data.message?.content || '';
+        } catch (localFallbackErr) {
+            circuitBreaker.recordFailure(fallbackEndpoint);
+            throw localFallbackErr;
         }
     };
     const tryHeuristicFallback = async () => {
@@ -803,4 +881,45 @@ const getToolList = () => {
         params: tool.params
     }));
 };
-module.exports = { processMessage, getToolList, TOOL_REGISTRY, callLLM, sessionCache };
+
+const askWingman = async (alertContext) => {
+    const alertStr = typeof alertContext === 'string' ? alertContext : JSON.stringify(alertContext);
+    const systemPrompt = `You are 'The Wingman', an elite cyber warfare mastermind for the Bayezid Hybrid SOC.
+You must analyze the following security alert and provide a recommended defensive action.
+Respond ONLY with a valid JSON object matching this exact format:
+{
+    "recommended_action": "ISOLATE_NODE, DECEPTIVE_PROBE, ACTIVE_NEUTRALIZATION, ESCALATE_RESPONSE, OBSERVE, or PROACTIVE_HUNT",
+    "confidence": 0.95,
+    "reasoning": "Brief explanation"
+}`;
+    const messages = [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: alertStr }
+    ];
+    try {
+        const response = await callLLM(messages);
+        let parsed;
+        try {
+            const cleaned = response.replace(/```[a-zA-Z0-9]*\n?/g, '').replace(/```/g, '').trim();
+            parsed = JSON.parse(cleaned);
+        } catch (err) {
+            const match = response.match(/"recommended_action"\s*:\s*"([^"]+)"/);
+            const action = match ? match[1] : 'OBSERVE';
+            parsed = {
+                recommended_action: action,
+                confidence: 0.8,
+                reasoning: response
+            };
+        }
+        return parsed;
+    } catch (e) {
+        console.error(`[⚠️ askWingman] Failed to get response from Wingman:`, e.message);
+        return {
+            recommended_action: 'OBSERVE',
+            confidence: 0.5,
+            reasoning: 'Graceful fallback: ' + e.message
+        };
+    }
+};
+
+module.exports = { processMessage, getToolList, TOOL_REGISTRY, callLLM, sessionCache, askWingman };

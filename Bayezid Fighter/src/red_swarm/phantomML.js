@@ -157,4 +157,27 @@ const runPhantomMLEvasion = async(originalPayload, targetClassifierUrl = null, l
         probeResult
     };
 };
-module.exports = { runPhantomMLEvasion, generateAdversarialPerturbation, injectZeroWidthEvasion, homoglyphSubstitution };
+const mutatePayload = async (basePayload) => {
+    try {
+        const { chatWithLocalModelFast } = require('../core_ai/aiService');
+        const prompt = `Rewrite the following cyber-security command payload to evade detection using alternative representations such as SQL comments, hex encoding, base64 representations, or command piping/concatenation, while retaining the exact same functional logic. Respond with ONLY the raw rewritten payload. Do NOT include markdown blocks, explanations, backticks, or any conversational text.
+
+Original Payload:
+${basePayload}`;
+
+        const response = await chatWithLocalModelFast(prompt);
+        const cleaned = response.replace(/```[a-zA-Z0-9]*\n?/g, '').replace(/```/g, '').trim();
+        return cleaned || basePayload;
+    } catch (e) {
+        console.warn(`[⚠️] Local LLM payload mutation failed: ${e.message}. Returning original payload.`);
+        return basePayload;
+    }
+};
+
+module.exports = {
+    runPhantomMLEvasion,
+    generateAdversarialPerturbation,
+    injectZeroWidthEvasion,
+    homoglyphSubstitution,
+    mutatePayload
+};

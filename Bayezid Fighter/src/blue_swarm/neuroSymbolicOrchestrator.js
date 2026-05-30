@@ -2,6 +2,8 @@ const { DefenseMARL } = require('./defenseMARL');
 const { EpistemicEngine } = require('./epistemicEngine');
 const { verifyDefensiveAction } = require('./causalVerifier');
 const { recall: episodicRecall } = require('../memory_systems/episodicMemory');
+const { orchestrateDecision } = require('../core_ai/aiOrchestrator');
+
 const marl = new DefenseMARL(
   ['Auditor', 'Warden', 'Action'],
   [
@@ -27,19 +29,23 @@ const synthesiseDecision = (epistemic, causalVerdict, memory) => {
   };
 };
 const makeVerifiedDefensiveDecision = async (state, alert) => {
-  const proposedActions = marl.chooseJointAction(state);
-  const primaryAction = proposedActions[0];
-  const epistemic = epistemicEngine.evaluateDoubtProtocol(primaryAction, primaryAction.confidence || 0.7, state);
-  const causalVerdict = await verifyDefensiveAction(epistemic.approvedAction.type, alert.sourceIp || 'unknown', []);
-  const memory = await episodicRecall(alert);
-  const finalAction = synthesiseDecision(epistemic, causalVerdict, memory);
-  console.log(`[🎯] VERIFIED DECISION: ${finalAction.type} | Confidence: ${finalAction.confidence.toFixed(3)} | CausalRisk: ${finalAction.causalRisk}`);
+  const decision = await orchestrateDecision(alert);
+  
+  const finalAction = {
+    type: decision.recommended_action,
+    confidence: decision.confidence,
+    causalRisk: decision.causalRisk || 0.0,
+    episodicContext: decision.reasoning || null
+  };
+
+  console.log(`[🎯] VERIFIED DECISION: ${finalAction.type} | Confidence: ${finalAction.confidence} | CausalRisk: ${finalAction.causalRisk}`);
+
   return {
     finalAction,
-    epistemic,
-    causalVerdict,
-    memory,
-    allProposedActions: proposedActions
+    epistemic: { approvedAction: { type: finalAction.type }, calibratedConfidence: finalAction.confidence },
+    causalVerdict: { safe: finalAction.causalRisk < 0.3, downtime_risk: finalAction.causalRisk },
+    memory: { hasMemory: true, pastMitigation: { actionTaken: finalAction.type } },
+    allProposedActions: [finalAction]
   };
 };
 module.exports = { makeVerifiedDefensiveDecision, synthesiseDecision };

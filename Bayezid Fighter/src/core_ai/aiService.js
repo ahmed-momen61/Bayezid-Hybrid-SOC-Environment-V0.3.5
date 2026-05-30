@@ -23,6 +23,41 @@ const k8s = require('@kubernetes/client-node');
 const kc = new k8s.KubeConfig();
 kc.loadFromDefault();
 const k8sApi = kc.makeApiClient(k8s.CoreV1Api);
+const withTimeout = (promise, ms = 15000, label = 'AI Call') => {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`[CircuitBreaker] ${label} timed out after ${ms / 1000}s`)), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+};
+const circuitBreaker = {
+    endpoints: {},
+    FAILURE_THRESHOLD: 3,
+    COOLDOWN_MS: 60000,
+    recordFailure: (endpoint) => {
+        if (!circuitBreaker.endpoints[endpoint]) {
+            circuitBreaker.endpoints[endpoint] = { failures: 0, lastFailure: 0 };
+        }
+        circuitBreaker.endpoints[endpoint].failures++;
+        circuitBreaker.endpoints[endpoint].lastFailure = Date.now();
+    },
+    recordSuccess: (endpoint) => {
+        if (circuitBreaker.endpoints[endpoint]) {
+            circuitBreaker.endpoints[endpoint].failures = 0;
+        }
+    },
+    isOpen: (endpoint) => {
+        const state = circuitBreaker.endpoints[endpoint];
+        if (!state) return false;
+        if (state.failures >= circuitBreaker.FAILURE_THRESHOLD) {
+            if (Date.now() - state.lastFailure < circuitBreaker.COOLDOWN_MS) {
+                return true;
+            }
+            state.failures = 0;
+        }
+        return false;
+    }
+};
 const sanitizePayloadForAI = rawPayload => {
     if (!rawPayload)
         return '';
@@ -177,6 +212,11 @@ const analyzeWithGroq = async (prompt, requireJson = false) => {
     const groqApiKey = process.env.GROQ_API_KEY;
     if (!groqApiKey)
         throw new Error('GROQ_API_KEY missing');
+    const endpoint = 'groq_api';
+    if (circuitBreaker.isOpen(endpoint)) {
+        console.log(`[⚡] Circuit OPEN for Groq API. Skipping (cooldown active).`);
+        throw new Error('Circuit breaker open for Groq API');
+    }
     const payload = {
         model: 'llama-3.1-8b-instant',
         messages: [{
@@ -190,37 +230,60 @@ const analyzeWithGroq = async (prompt, requireJson = false) => {
         payload.response_format = { type: 'json_object' };
     }
     try {
-        const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', payload, {
-            headers: {
-                'Authorization': `Bearer ${ groqApiKey }`,
-                'Content-Type': 'application/json'
-            },
-            timeout: 10000
-        });
+        const response = await withTimeout(
+            axios.post('https://api.groq.com/openai/v1/chat/completions', payload, {
+                headers: {
+                    'Authorization': `Bearer ${ groqApiKey }`,
+                    'Content-Type': 'application/json'
+                },
+                timeout: 10000
+            }),
+            12000,
+            'Groq API'
+        );
+        circuitBreaker.recordSuccess(endpoint);
         return response.data.choices[0].message.content;
     } catch (err) {
+        circuitBreaker.recordFailure(endpoint);
         const errorDetails = err.response && err.response.data ? JSON.stringify(err.response.data) : err.message;
         throw new Error(`Groq API Error: ${ errorDetails }`);
     }
 };
 const chatWithLocalModelFast = async prompt => {
+    const endpoint = 'ollama_local';
+    if (circuitBreaker.isOpen(endpoint)) {
+        console.log(`[⚡] Circuit OPEN for Local AI. Skipping (cooldown active).`);
+        throw new Error('Circuit breaker open for Local AI');
+    }
     try {
-        const localResponse = await axios.post('http://localhost:11434/api/generate', {
-            model: process.env.LOCAL_MODEL_NAME || 'qwen2.5-coder:7b',
-            prompt: prompt,
-            stream: false
-        }, { timeout: 90000 });
+        const localResponse = await withTimeout(
+            axios.post('http://localhost:11434/api/generate', {
+                model: process.env.LOCAL_MODEL_NAME || 'qwen2.5-coder:7b',
+                prompt: prompt,
+                stream: false
+            }, { timeout: 90000 }),
+            90000,
+            'Local AI Primary'
+        );
+        circuitBreaker.recordSuccess(endpoint);
         return localResponse.data.response;
     } catch (error) {
         console.log(`[⚠️] Primary Local AI Failed. Switching to Lightweight Local Fallback...`);
+        circuitBreaker.recordFailure(endpoint);
         try {
-            const fallbackResponse = await axios.post('http://localhost:11434/api/generate', {
-                model: 'qwen2.5-coder:1.5b',
-                prompt: prompt,
-                stream: false
-            }, { timeout: 90000 });
+            const fallbackResponse = await withTimeout(
+                axios.post('http://localhost:11434/api/generate', {
+                    model: 'qwen2.5-coder:1.5b',
+                    prompt: prompt,
+                    stream: false
+                }, { timeout: 90000 }),
+                90000,
+                'Local AI Fallback'
+            );
+            circuitBreaker.recordSuccess(endpoint);
             return fallbackResponse.data.response;
         } catch (fallbackError) {
+            circuitBreaker.recordFailure(endpoint);
             throw new Error(`Local AI Fast Chat Error (Both models failed): ${ error.message } | ${ fallbackError.message }`);
         }
     }

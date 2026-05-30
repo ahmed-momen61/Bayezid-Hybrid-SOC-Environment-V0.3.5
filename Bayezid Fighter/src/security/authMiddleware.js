@@ -1,7 +1,6 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../api/prismaClient');
 const JWT_SECRET = process.env.JWT_SECRET;
 const MASTER_SCOPE_KEY = process.env.MASTER_SCOPE_KEY || 'bayezid-scope-default-key';
 const ROLE_BITS = {
