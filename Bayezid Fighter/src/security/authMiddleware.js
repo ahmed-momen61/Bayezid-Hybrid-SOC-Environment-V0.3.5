@@ -52,7 +52,11 @@ const ROUTE_POLICY = {
     'POST:/api/v1/wingman/chat': 'JUNIOR_ANALYST',
     'GET:/api/v1/wingman/session/:id': 'JUNIOR_ANALYST',
     'DELETE:/api/v1/wingman/session/:id': 'SENIOR_ANALYST',
-    'POST:/api/v1/wingman/tools': 'VIEWER'
+    'POST:/api/v1/wingman/tools': 'VIEWER',
+    'POST:/api/v1/osint/investigate': 'JUNIOR_ANALYST',
+    'GET:/api/v1/osint/graph': 'VIEWER',
+    'GET:/api/v1/osint/investigations': 'VIEWER',
+    'POST:/api/v1/osint/recon/nmap': 'RED_OPERATOR'
 };
 const authMiddleware = async(req, res, next) => {
     const routeKey = `${req.method}:${req.path.replace(/\/$/, '')}`;

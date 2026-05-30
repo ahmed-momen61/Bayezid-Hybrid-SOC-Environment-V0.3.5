@@ -28,82 +28,34 @@ const escapeHTML = (text) => {
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 };
 const setupCommands = (bot) => {
-    bot.use(async (ctx, next) => {
-        if (!ctx.from) return;
-        
-        const userId = ctx.from.id.toString();
-        const isAdminId = userId === process.env.TELEGRAM_ADMIN_ID;
-        
-        if (isAdminId) {
-            const text = ctx.message && ctx.message.text ? ctx.message.text.trim() : '';
-            if (text.startsWith('/auth')) {
-                const pin = text.split(' ')[1];
-                if (pin && pin === process.env.TELEGRAM_SOC_PIN) {
-                    authenticatedAdmins.add(userId);
-                    return await ctx.reply("SOC Authorization Granted 🛡️");
-                } else {
-                    return await ctx.reply("Session locked. Please use /auth <PIN>");
-                }
-            }
-            
-            if (!authenticatedAdmins.has(userId)) {
-                return await ctx.reply("Session locked. Please use /auth <PIN>");
-            }
-            
-            return next();
-        } else {
-            if (!ctx.message || !ctx.message.text) return;
-            const text = ctx.message.text.trim();
-            
-            try {
-                await initializeGuest(userId, ctx.from.username || 'unknown');
-                
-                if (text.startsWith('/nickname')) {
-                    const name = text.split(' ').slice(1).join(' ').trim();
-                    if (!name) return await ctx.reply("Usage: /nickname <name>");
-                    await updateGuestPreference(userId, 'nickname', name);
-                    return await ctx.reply(`Nickname updated to: ${name}`);
-                }
-                
-                if (text.startsWith('/persona')) {
-                    const persona = text.split(' ').slice(1).join(' ').trim();
-                    if (!persona) return await ctx.reply("Usage: /persona <role>");
-                    await updateGuestPreference(userId, 'persona', persona);
-                    return await ctx.reply(`Persona updated to: ${persona}`);
-                }
+    const sessionStates = new Map();
 
-                if (text.startsWith('/start')) {
-                    return await ctx.reply(
-                        `🟢 Welcome to the Wingman Sandbox.\n\n` +
-                        `Here you can consult with me about cybersecurity, code, or anything else under a strict air-gap boundary.\n\n` +
-                        `Commands:\n` +
-                        `/nickname <name> - Change how I call you\n` +
-                        `/persona <role> - Customize my roleplay persona\n` +
-                        `/start - Show this help message`
-                    );
-                }
-                
-                await saveGuestMessage(userId, 'user', text);
-                const messages = await buildGuestPrompt(userId, text);
-                
-                const responseText = await callLLM(messages);
-                await saveGuestMessage(userId, 'assistant', responseText);
-                
-                const chunks = splitMessage(responseText);
-                for (const chunk of chunks) {
-                    await ctx.reply(chunk);
-                }
-            } catch (err) {
-                console.error(`[⚠️ Guest Sandbox Error]`, err.message);
-                await ctx.reply(`⚠️ Sandbox error: ${err.message}`);
-            }
+    const isAuthorized = (ctx) => {
+        const chatId = ctx.chat ? ctx.chat.id.toString() : '';
+        const userId = ctx.from ? ctx.from.id.toString() : '';
+        const authorized = (process.env.WINGMAN_AUTHORIZED_OPERATORS || '')
+            .split(',')
+            .map(id => id.trim())
+            .filter(Boolean);
+        return authorized.includes(chatId) || authorized.includes(userId);
+    };
+
+    const requireTacticalAuth = async (ctx, next) => {
+        if (!isAuthorized(ctx)) {
+            await ctx.reply('⛔ Access Denied: Unauthorized Operator.');
+            return;
         }
-    });
-    // --- DUAL GATEWAY STATE MANAGEMENT ---
-    const sessionStates = new Map(); // chat_id -> { mode: 'SANDBOX' | 'SOC_TACTICAL', authState: 'PENDING_PIN' | 'AUTHENTICATED' | null }
+        const state = sessionStates.get(ctx.chat.id.toString());
+        if (!state || state.mode !== 'SOC_TACTICAL' || state.authState !== 'AUTHENTICATED') {
+            await ctx.reply('⛔ SECURITY_VETO: This command requires an authenticated SOC_TACTICAL session. Type /start to initialize.');
+            return;
+        }
+        return next();
+    };
 
     bot.command('start', async (ctx) => {
-        sessionStates.set(ctx.chat.id.toString(), { mode: null, authState: null });
+        const chatId = ctx.chat.id.toString();
+        sessionStates.set(chatId, { mode: null, authState: null });
         await ctx.replyWithHTML(
             `🦾 <b>THE WINGMAN — Dual-Gateway Uplink</b>\n\n` +
             `Identify operational context:\n\n`,
@@ -111,7 +63,7 @@ const setupCommands = (bot) => {
                 reply_markup: {
                     inline_keyboard: [
                         [{ text: '🟢 Chit-Chat (Sandbox)', callback_data: 'mode_sandbox' }],
-                        [{ text: '🔴 SOC Tactical (Command Center)', callback_data: 'mode_tactical' }]
+                        [{ text: '🔴 SOC Tactical Command Center', callback_data: 'mode_tactical' }]
                     ]
                 }
             }
@@ -126,7 +78,8 @@ const setupCommands = (bot) => {
         Promise.resolve().then(async () => {
             let response = '';
             try {
-                const result = await processMessage(prompt, sessionId, null, 'telegram_operator', executionMode);
+                const userId = ctx.from ? ctx.from.id.toString() : 'telegram_operator';
+                const result = await processMessage(prompt, sessionId, null, userId, executionMode);
                 response = result.finalResponse || response;
             } catch (e) {
                 response = `⚠️ Error processing request: ${e.message}`;
@@ -134,23 +87,22 @@ const setupCommands = (bot) => {
             if (!response || response.trim() === '') response = 'Processed request successfully, but no output generated.';
             const chunks = splitMessage(response);
             try {
-                await ctx.telegram.editMessageText(ctx.chat.id, thinkingMsg.message_id, undefined, chunks[0]);
+                await ctx.telegram.editMessageText(ctx.chat.id, thinkingMsg.message_id, undefined, chunks[0], { parse_mode: 'HTML' });
             } catch(e) {
-                await ctx.telegram.sendMessage(ctx.chat.id, chunks[0]);
+                try {
+                    await ctx.telegram.sendMessage(ctx.chat.id, chunks[0], { parse_mode: 'HTML' });
+                } catch (e2) {
+                    await ctx.telegram.sendMessage(ctx.chat.id, chunks[0]);
+                }
             }
             for (let i = 1; i < chunks.length; i++) {
-                await ctx.telegram.sendMessage(ctx.chat.id, chunks[i]);
+                try {
+                    await ctx.telegram.sendMessage(ctx.chat.id, chunks[i], { parse_mode: 'HTML' });
+                } catch (e3) {
+                    await ctx.telegram.sendMessage(ctx.chat.id, chunks[i]);
+                }
             }
         }).catch(e => console.error("[WINGMAN] Async dispatch error:", e.message));
-    };
-
-    const requireTacticalAuth = async (ctx, next) => {
-        const state = sessionStates.get(ctx.chat.id.toString());
-        if (!state || state.mode !== 'SOC_TACTICAL' || state.authState !== 'AUTHENTICATED') {
-            await ctx.reply('⛔ SECURITY_VETO: This command requires an authenticated SOC_TACTICAL session. Type /start to initialize.');
-            return;
-        }
-        return next();
     };
 
     bot.command('status', requireTacticalAuth, async (ctx) => {
@@ -222,17 +174,68 @@ const setupCommands = (bot) => {
         const sessionId = `telegram_${ctx.chat.id}_brief`;
         await dispatchAsync(ctx, 'Give me a comprehensive system briefing covering health, alerts, active operations, LoRA status, and any recent notable events', sessionId, 'SOC_TACTICAL');
     });
-    
+
+    bot.command('nickname', async (ctx) => {
+        const chatId = ctx.chat.id.toString();
+        const state = sessionStates.get(chatId) || { mode: null, authState: null };
+        if (state.mode !== 'SANDBOX') {
+            return ctx.reply('⛔ This command is only available in Sandbox mode. Type /start to initialize.');
+        }
+        const message = ctx.message.text;
+        const args = message.split(' ').slice(1).join(' ').trim();
+        if (!args) {
+            return ctx.reply('Usage: /nickname <your_preferred_name>');
+        }
+
+        const userId = ctx.from ? ctx.from.id.toString() : chatId;
+        try {
+            await updateGuestPreference(userId, 'nickname', args);
+            await ctx.reply(`✅ Nickname updated to: ${args}. I will address you as such.`);
+        } catch (err) {
+            await ctx.reply(`❌ Failed to update nickname: ${err.message}`);
+        }
+    });
+
+    bot.command('persona', async (ctx) => {
+        const chatId = ctx.chat.id.toString();
+        const state = sessionStates.get(chatId) || { mode: null, authState: null };
+        if (state.mode !== 'SANDBOX') {
+            return ctx.reply('⛔ This command is only available in Sandbox mode. Type /start to initialize.');
+        }
+        const message = ctx.message.text;
+        const args = message.split(' ').slice(1).join(' ').trim();
+        if (!args) {
+            return ctx.reply('Usage: /persona <custom_role>');
+        }
+
+        const userId = ctx.from ? ctx.from.id.toString() : chatId;
+        try {
+            await updateGuestPreference(userId, 'persona', args);
+            await ctx.reply(`✅ Persona updated to: ${args}. I will adopt this roleplay context.`);
+        } catch (err) {
+            await ctx.reply(`❌ Failed to update persona: ${err.message}`);
+        }
+    });
+
     bot.on('text', async (ctx) => {
+        if (!ctx.message || !ctx.message.text) return;
         const message = ctx.message.text;
         const chatId = ctx.chat.id.toString();
-        
+
         let state = sessionStates.get(chatId) || { mode: null, authState: null };
-        
+
         // Handle PIN input flow
         if (state.authState === 'PENDING_PIN') {
+            if (!isAuthorized(ctx)) {
+                state.mode = null;
+                state.authState = null;
+                sessionStates.set(chatId, state);
+                await ctx.reply("⛔ Access Denied: Unauthorized Operator.");
+                return;
+            }
             const expectedPin = process.env.WINGMAN_TELEGRAM_PIN;
             if (message.trim() === expectedPin) {
+                state.mode = 'SOC_TACTICAL';
                 state.authState = 'AUTHENTICATED';
                 sessionStates.set(chatId, state);
                 await ctx.replyWithHTML(`✅ <b>AUTHORIZATION ACCEPTED</b>\n\nFull kinetic SOC privileges unlocked. What are your orders?`);
@@ -244,35 +247,87 @@ const setupCommands = (bot) => {
             }
             return;
         }
-        
+
         if (!state.mode) {
             return ctx.reply('Type /start to select an operational mode.');
+        }
+
+        if (state.mode === 'SOC_TACTICAL') {
+            if (!isAuthorized(ctx) || state.authState !== 'AUTHENTICATED') {
+                return ctx.reply('⛔ SECURITY_VETO: SOC_TACTICAL session is not authorized. Type /start to initialize.');
+            }
         }
 
         const executionMode = state.mode;
         const sessionId = `telegram_${chatId}_chat_${executionMode}`;
         await dispatchAsync(ctx, message, sessionId, executionMode);
     });
+
     bot.on('callback_query', async (ctx) => {
-        const userId = ctx.from ? ctx.from.id.toString() : '';
-        const isAdmin = userId === process.env.TELEGRAM_ADMIN_ID;
-        if (!isAdmin || !authenticatedAdmins.has(userId)) {
-            try { await ctx.answerCbQuery("⛔ Access Denied: SOC Authorization Required.", { show_alert: true }); } catch (e) {}
-            return;
-        }
+        if (!ctx.callbackQuery || !ctx.callbackQuery.data) return;
+
         const data = ctx.callbackQuery.data;
         const chatId = ctx.chat.id.toString();
+        const state = sessionStates.get(chatId) || { mode: null, authState: null };
 
         if (data === 'mode_sandbox') {
+            const userId = ctx.from ? ctx.from.id.toString() : chatId;
+            try {
+                const { initializeGuest } = require('../memory_systems/guestMemoryManager');
+                await initializeGuest(userId, ctx.from ? ctx.from.username : 'unknown');
+            } catch (err) {
+                console.error('[-] Guest memory init error:', err.message);
+            }
             sessionStates.set(chatId, { mode: 'SANDBOX', authState: null });
-            await ctx.editMessageText(`🟢 <b>SANDBOX MODE ENGAGED</b>\n\nAir-gap verified. Zero kinetic hooks. What's on your mind?`, { parse_mode: 'HTML' });
+            await ctx.editMessageText(
+                `🟢 <b>Welcome to the Wingman Sandbox.</b>\n\n` +
+                `Here you can consult with me about cybersecurity, code, or anything else under a strict air-gap boundary.\n\n` +
+                `<b>Commands:</b>\n` +
+                `/nickname &lt;name&gt; - Change how I call you\n` +
+                `/persona &lt;role&gt; - Customize my roleplay persona\n` +
+                `/start - Show this help message`,
+                { parse_mode: 'HTML' }
+            );
+            try { await ctx.answerCbQuery(); } catch (e) {}
             return;
         }
 
         if (data === 'mode_tactical') {
-            sessionStates.set(chatId, { mode: 'SOC_TACTICAL', authState: 'PENDING_PIN' });
+            if (!isAuthorized(ctx)) {
+                try { await ctx.answerCbQuery("⛔ Access Denied: SOC Tactical Center requires operator authorization.", { show_alert: true }); } catch (e) {}
+                await ctx.reply("⛔ Access Denied: SOC Tactical Center requires operator authorization.");
+                return;
+            }
+            sessionStates.set(chatId, { mode: null, authState: 'PENDING_PIN' });
             await ctx.editMessageText(`🔴 <b>SOC TACTICAL SELECTED</b>\n\nProvide Secondary Authorization PIN:`, { parse_mode: 'HTML' });
+            try { await ctx.answerCbQuery(); } catch (e) {}
             return;
+        }
+
+        // For dynamic kinetic actions, verify operator authorization and authenticated tactical session
+        const kineticActions = [
+            'confirm_block_',
+            'wingman_analyze_',
+            'wingman_playbook_',
+            'wingman_block_',
+            'approve_evolution_',
+            'evolution_defer',
+            'approve_'
+        ];
+
+        const isKinetic = kineticActions.some(action => data.startsWith(action) || data === action);
+        if (isKinetic) {
+            if (!isAuthorized(ctx)) {
+                try { await ctx.answerCbQuery("⛔ Access Denied: Unauthorized Operator.", { show_alert: true }); } catch (e) {}
+                return;
+            }
+            if (!state || state.mode !== 'SOC_TACTICAL' || state.authState !== 'AUTHENTICATED') {
+                try {
+                    await ctx.answerCbQuery("⛔ Access Denied: Authenticated SOC_TACTICAL session required.", { show_alert: true });
+                } catch (e) {}
+                await ctx.reply('⛔ SECURITY_VETO: This action requires an authenticated SOC_TACTICAL session. Type /start to initialize.');
+                return;
+            }
         }
 
         if (data.startsWith('confirm_block_')) {
@@ -351,7 +406,7 @@ const setupCommands = (bot) => {
                     args: [{
                         alertId: alertId,
                         initialPayload: { trigger: 'telegram_dynamic_playbook' },
-                        sourceIp: '127.0.0.1', 
+                        sourceIp: '127.0.0.1',
                         targetAsset: 'telegram_operator'
                     }]
                 });
@@ -359,7 +414,7 @@ const setupCommands = (bot) => {
                 await ctx.reply(`❌ Failed to trigger dynamic playbook workflow: ${err.message}`);
             }
         }
-        try { await ctx.answerCbQuery(); } catch (e) {  }
+        try { await ctx.answerCbQuery(); } catch (e) {}
     });
 };
 const sendProactiveAlert = async (message, keyboard = null) => {
@@ -419,7 +474,11 @@ const startTelegramBot = () => {
         botActive = true;
         console.log('[📱] Wingman Telegram Bot launched and listening.');
     }).catch(e => {
-        console.error('[📱] Telegram Bot launch failed:', e.message);
+        if (e.message.includes('getaddrinfo') || e.message.includes('ENOTFOUND') || e.message.includes('ETIMEDOUT')) {
+            console.warn('[📱] Telegram Bot: Network/DNS resolution failed (Offline). Running in degraded mode without Telegram uplink.');
+        } else {
+            console.error('[📱] Telegram Bot launch failed:', e.message);
+        }
     });
     process.once('SIGINT', () => { if (bot) bot.stop('SIGINT'); });
     process.once('SIGTERM', () => { if (bot) bot.stop('SIGTERM'); });

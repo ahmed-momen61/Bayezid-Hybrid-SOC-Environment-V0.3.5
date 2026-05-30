@@ -11,7 +11,7 @@ const path = require('path');
 const { processTuningCommand, liveConfig } = require('../core_ai/tuningService');
 const { smartExec, analyzeWithVertexAI, analyzeWithLocalModel, runScoutAgent, runBreacherAgent, runPhantomAgent, runChameleonAgent, runOverlordAgent, runScribeAgent, runActionAgent, bridgeRedToBlue, applyFixAndVerify, runStealthScribeAgent, runVetoAgent, runShadowRouterAgent, runForensicRCAAgent, executeAlchemistFuzzingLoop, runMirageAgent, runWardenSandbox, runZeroDayForgeAgent } = require('../core_ai/aiService');
 const { executePlaybook } = require('../cti/playbookService');
-const { enrichWithOSINT } = require('../cti/osintService');
+const { enrichWithOSINT, runDeepInvestigation, listInvestigations, getInvestigation, discoverOwnSubdomains, scanOwnSubnet } = require('../cti/osintService');
 const { sendTelegramAlert, broadcastAlert, initWsBatching } = require('./notificationService');
 const { loadMitreDatabase } = require('../cti/ragService');
 const { enrichWithCTI } = require('../cti/ctiService');
@@ -776,7 +776,11 @@ const startEscalationWatcher = () => {
                 console.log(`[✔] Auto-Escalation Complete for IP: ${alert.sourceIp}`);
             }
         } catch (error) {
-            console.error('[-] Escalation Watcher Error:', error.message);
+            if (error.message.includes("Can't reach database server") || error.message.includes("Timed out fetching a new connection")) {
+                console.warn('[⚠️] Escalation Watcher: Database is offline or unreachable. Will retry in 1 minute.');
+            } else {
+                console.error('[-] Escalation Watcher Error:', error.message);
+            }
         } finally {
             setTimeout(watch, 60 * 1000);
         }
@@ -1231,6 +1235,51 @@ app.post('/api/v1/oracle-g/isolate', async(req, res) => {
 app.get('/api/v1/oracle-g/topology', async(req, res) => {
     oracleGNN.propagate();
     res.json({ status: 'success', data: oracleGNN.getTopology() });
+});
+app.post('/api/v1/osint/investigate', async (req, res) => {
+    const { seed, seedType } = req.body;
+    if (!seed || !seedType) return res.status(400).json({ error: 'seed and seedType are required' });
+    console.log(`\n[🕵️] API Triggered: Deep OSINT Investigation on ${seedType}: ${seed}...`);
+    try {
+        const result = await runDeepInvestigation(seed, seedType);
+        res.json({ status: 'success', data: result });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+app.get('/api/v1/osint/graph', async (req, res) => {
+    const { seed } = req.query;
+    if (!seed) return res.status(400).json({ error: 'seed query parameter is required' });
+    try {
+        const result = await getInvestigation(seed);
+        if (!result) return res.status(404).json({ error: 'Investigation not found' });
+        res.json({ status: 'success', data: result });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+app.get('/api/v1/osint/investigations', async (req, res) => {
+    try {
+        const result = await listInvestigations();
+        res.json({ status: 'success', data: result });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+app.post('/api/v1/osint/recon/nmap', redOpsLimiter, enforceRoE, async (req, res) => {
+    const { subnet } = req.body;
+    if (!subnet) return res.status(400).json({ error: 'subnet is required' });
+    console.log(`\n[🔍] API Triggered: Authorized Subnet Recon (Nmap) on ${subnet}...`);
+    try {
+        const authorization = {
+            authorisedBy: req.roeToken ? req.roeToken.createdBy : 'OPERATOR',
+            expiresAt: req.roeToken ? req.roeToken.expiresAt.toISOString() : new Date(Date.now() + 3600000).toISOString()
+        };
+        const result = await scanOwnSubnet(subnet, authorization);
+        res.json({ status: 'success', data: result });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 app.post('/api/v1/shadow-mirror/zero-fail', redOpsLimiter, enforceRoE, async(req, res) => {
     const { scoutTelemetry, payload, iterations } = req.body;

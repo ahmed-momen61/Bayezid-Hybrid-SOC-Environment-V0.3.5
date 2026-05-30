@@ -1,7 +1,6 @@
 const acorn = require('acorn');
 const walk = require('acorn-walk');
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const prisma = require('../api/prismaClient');
 const DEFAULT_PROFILE = {
     code_style: {
         js_declarations: 'const',           

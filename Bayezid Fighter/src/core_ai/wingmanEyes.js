@@ -1,7 +1,6 @@
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../api/prismaClient');
 const axios = require('axios');
 const { redisClient, getRecentAgentEvents } = require('../memory_systems/memoryService');
-const prisma = new PrismaClient();
 const ML_ENGINE_URL = process.env.ML_ENGINE_URL || 'http://localhost:8000';
 const liveSystemState = {
     snapshot_time: null,

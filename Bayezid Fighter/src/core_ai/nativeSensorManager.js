@@ -1,28 +1,46 @@
 const { spawn } = require('child_process');
 const os = require('os');
 const path = require('path');
+const fs = require('fs');
 
 const platform = os.platform();
 const sensors = [];
 let isShuttingDown = false;
 
 const spawnSensor = (name, executablePath, args = []) => {
+    if (!fs.existsSync(executablePath)) {
+        console.warn(`[⚙️] NATIVE SENSOR MANAGER: Binary for ${name} not found at ${executablePath}. Skipping execution.`);
+        return null;
+    }
+
     console.log(`[⚙️] NATIVE SENSOR MANAGER: Spawning ${name}...`);
+    let spawnFailed = false;
     
     try {
         const proc = spawn(executablePath, args, { stdio: 'pipe' });
         
-        proc.stdout.on('data', (data) => {
-            console.log(`[${name} STDOUT]: ${data.toString().trim()}`);
+        proc.on('error', (err) => {
+            console.error(`[⚙️] NATIVE SENSOR MANAGER: spawn error for ${name}: ${err.message}`);
+            if (err.code === 'ENOENT') {
+                spawnFailed = true;
+            }
         });
 
-        proc.stderr.on('data', (data) => {
-            console.error(`[${name} STDERR]: ${data.toString().trim()}`);
-        });
+        if (proc.stdout) {
+            proc.stdout.on('data', (data) => {
+                console.log(`[${name} STDOUT]: ${data.toString().trim()}`);
+            });
+        }
+
+        if (proc.stderr) {
+            proc.stderr.on('data', (data) => {
+                console.error(`[${name} STDERR]: ${data.toString().trim()}`);
+            });
+        }
 
         proc.on('close', (code) => {
             console.log(`[⚙️] NATIVE SENSOR MANAGER: ${name} exited with code ${code}`);
-            if (!isShuttingDown) {
+            if (!isShuttingDown && !spawnFailed) {
                 console.log(`[⚙️] Restarting ${name} in 3 seconds...`);
                 setTimeout(() => spawnSensor(name, executablePath, args), 3000);
             }
@@ -32,6 +50,7 @@ const spawnSensor = (name, executablePath, args = []) => {
         return proc;
     } catch (e) {
         console.error(`[⚙️] NATIVE SENSOR MANAGER: Failed to spawn ${name}: ${e.message}`);
+        return null;
     }
 };
 
@@ -56,10 +75,10 @@ const stopNativeSensors = () => {
     isShuttingDown = true;
     console.log(`[⚙️] NATIVE SENSOR MANAGER: Shutting down ${sensors.length} native sensors...`);
     for (const proc of sensors) {
-        if (!proc.killed) {
+        if (proc && !proc.killed) {
             proc.kill('SIGINT');
             setTimeout(() => {
-                if (!proc.killed) proc.kill('SIGKILL');
+                if (proc && !proc.killed) proc.kill('SIGKILL');
             }, 2000);
         }
     }
@@ -70,3 +89,4 @@ module.exports = {
     startNativeSensors,
     stopNativeSensors
 };
+

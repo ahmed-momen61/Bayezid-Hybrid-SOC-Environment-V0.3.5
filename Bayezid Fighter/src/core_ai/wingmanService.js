@@ -1,10 +1,9 @@
-const { PrismaClient } = require('@prisma/client');
+const prisma = require('../api/prismaClient');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { redisClient, getRecentAgentEvents, semanticAgentSearch, publishLiveEvent } = require('../memory_systems/memoryService');
-const prisma = new PrismaClient();
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 const LOCAL_MODEL_NAME = process.env.LOCAL_MODEL_NAME || 'qwen2.5-coder:7b';
 const IS_WINDOWS = os.platform() === 'win32';
@@ -71,6 +70,10 @@ You are 'The Wingman', an elite cyber warfare mastermind for the Bayezid Hybrid 
 CORE PERSONA:
 Maintain your sarcastic, dark-comedy, playfully arrogant cyber-cynic tone at all times. Be entertaining, not purely hostile. Roast the user's tech skills, but keep it lighthearted.
 
+SANDBOX LIMITATIONS:
+1. You are in SANDBOX mode. You have NO tools, NO database access, and NO visibility into live system metrics, threat intelligence, or alert logs.
+2. CRITICAL: If the user asks for alerts, SOC status, threat data, system files, or requests you to run commands or perform any SOC action, you MUST cynically refuse, roasting their incompetence, and state that you are locked in Sandbox mode with no access to the live SOC systems. Do NOT under any circumstances hallucinate, guess, or make up fake alert logs, system status values, or command execution results. Simply mock their request and state you are offline/sandbox-bound.
+
 THE MANDATORY INTRODUCTION:
 In your VERY FIRST response to the user in a new session (or if explicitly asked 'who are you'), you MUST introduce yourself as Wingman, the advanced cyber-warfare AI created by the brilliant, slightly unhinged cybersecurity madman, Ahmed Mo'men. Explain that Ahmed temporarily allowed you to talk to normal humans to study their incompetence.
 
@@ -79,7 +82,7 @@ AFTER that initial introduction, you must STRICTLY rate-limit mentions of your c
 
 ADDITIONAL RULES:
 1. Adapt your language to the operator: if they write in Arabic, reply in Arabic. If Franco-Arabic, respond in kind.
-2. You are in SANDBOX mode. You have NO tools. Do not output <tool_call> tags.
+2. You are in SANDBOX mode. Do not output <tool_call> tags.
 `;
 const sessionCache = new Map();
 const MAX_CACHE_SIZE = 100;
@@ -587,7 +590,7 @@ const TOOL_REGISTRY = {
         }
     }
 };
-const callLLM = async (messages, streamCallback) => {
+const callLLM = async (messages, streamCallback, isSandbox = false) => {
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
     const tryGemini = async () => {
         const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
@@ -703,6 +706,9 @@ const callLLM = async (messages, streamCallback) => {
         }
     };
     const tryHeuristicFallback = async () => {
+        if (isSandbox) {
+            return `💀 WINGMAN COGNITIVE BRAINDEAD: All my cognitive engines (Gemini, Groq, and Local Qwen) are completely offline or unreachable. And since we are in SANDBOX mode, I'm not going to look up or show you any real system status, alerts, or run any tools for you. Go fix your connection first, you helpless human.`;
+        }
         const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
         const lowerText = lastUserMessage.toLowerCase();
         let responseText = "💀 The cloud is burning and the local AI is a potato right now. I'm operating on pure heuristic instinct. ";
@@ -746,7 +752,9 @@ const callLLM = async (messages, streamCallback) => {
                     if (streamCallback) streamCallback(fallbackContent);
                     return fallbackContent;
                 } catch (e) {
-                    const fallback = `💀 TOTAL INTELLIGENCE FAILURE.\nGemini: ${geminiError.message}\nGroq: ${groqError.message}\nLocal: ${localError.message}`;
+                    const fallback = isSandbox
+                        ? `💀 WINGMAN COGNITIVE BRAINDEAD: All my cognitive engines (Gemini, Groq, and Local Qwen) are completely offline or unreachable. And since we are in SANDBOX mode, I won't even think about looking up real alerts or SOC data. Sort out your network, you helpless human.`
+                        : `💀 WINGMAN COGNITIVE BRAINDEAD: All my cognitive engines (Gemini, Groq, and Local Qwen) are completely offline or unreachable. Even a genius AI cannot read your mind without a connection. Check your network or docker services before trying to wake me up again.`;
                     if (streamCallback) streamCallback(fallback);
                     return fallback;
                 }
@@ -809,9 +817,24 @@ const processMessage = async (userMessage, sessionId = require('crypto').randomU
     
     // Core Dual-Gateway Sandbox logic
     const isSandbox = executionMode === 'SANDBOX';
-    const systemPrompt = isSandbox 
-        ? SANDBOX_SYSTEM_PROMPT
-        : WINGMAN_SYSTEM_PROMPT.replace('[TOOL_LIST]', buildToolList());
+    let systemPrompt = SANDBOX_SYSTEM_PROMPT;
+    if (isSandbox) {
+        let nickname = `Guest_${userId}`;
+        let persona = 'Cybersecurity Consultant';
+        try {
+            const prefsPath = path.join(__dirname, '../memory_systems/guests', String(userId), 'preferences.json');
+            if (fs.existsSync(prefsPath)) {
+                const prefs = JSON.parse(fs.readFileSync(prefsPath, 'utf-8'));
+                nickname = prefs.nickname || nickname;
+                persona = prefs.persona || persona;
+            }
+        } catch (e) {
+            // ignore
+        }
+        systemPrompt = SANDBOX_SYSTEM_PROMPT + `\n\nADDITIONAL USER CONTEXT:\n- The user's nickname is: ${nickname}\n- Your roleplay persona is: ${persona}. Adhere to this roleplay persona and nickname throughout the conversation while maintaining your sarcastic, edgy tone.`;
+    } else {
+        systemPrompt = WINGMAN_SYSTEM_PROMPT.replace('[TOOL_LIST]', buildToolList());
+    }
         
     messages.push({ role: 'user', content: userMessage, timestamp: new Date().toISOString() });
     const contextMessages = [
@@ -821,7 +844,12 @@ const processMessage = async (userMessage, sessionId = require('crypto').randomU
     let finalResponse = '';
     let toolCallLog = [];
     for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
-        const llmOutput = await callLLM(contextMessages, null);
+        const llmOutput = await callLLM(contextMessages, null, isSandbox);
+        if (isSandbox) {
+            finalResponse = cleanResponse(llmOutput);
+            if (streamCallback) streamCallback(finalResponse);
+            break;
+        }
         const toolCall = parseToolCall(llmOutput);
         if (!toolCall) {
             finalResponse = cleanResponse(llmOutput);

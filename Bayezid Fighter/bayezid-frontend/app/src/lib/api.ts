@@ -159,5 +159,22 @@ export const api = {
   setAutonomyMode: (mode: string): Promise<any> => api.post('/api/v1/config/set-autonomy', { mode }),
   startSigmaLoop: (): Promise<any> => api.post('/api/v1/sigma-live/start', {}),
   runKineticEvolver: (ctx: string): Promise<any> => api.post('/api/v1/kinetic-evolver/evolve', { anomalyContext: ctx }),
-  startWargaming: (targetAsset: string): Promise<any> => api.post('/api/v1/wargaming/start', { targetAsset })
+  startWargaming: (targetAsset: string): Promise<any> => api.post('/api/v1/wargaming/start', { targetAsset }),
+  runDeepOSINT: (seed: string, seedType: string): Promise<any> => api.post('/api/v1/osint/investigate', { seed, seedType }),
+  fetchOSINTGraph: (seed: string): Promise<any> => api.get(`/api/v1/osint/graph?seed=${encodeURIComponent(seed)}`),
+  fetchLatestOSINTInvestigations: (): Promise<any> => api.get('/api/v1/osint/investigations'),
+  runNmapRecon: (subnet: string, roeToken: string): Promise<any> => {
+    const headers = { 'x-roe-token': roeToken };
+    return fetch(`${BASE_URL}/api/v1/osint/recon/nmap`, {
+      method: 'POST',
+      headers: {
+        ...authHeaders(),
+        ...headers
+      },
+      body: JSON.stringify({ subnet })
+    }).then((res) => {
+      if (!res.ok) throw new Error(`Nmap Scan Failed: ${res.statusText}`);
+      return res.json();
+    });
+  }
 };
