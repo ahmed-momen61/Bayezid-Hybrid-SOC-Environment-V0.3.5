@@ -68,6 +68,18 @@ The platform has been heavily augmented with highly advanced evolutionary phases
 
 * **Domain-Driven Architecture**: The ecosystem has achieved enterprise scale. Over 70 chaotic core modules have been surgically decoupled into isolated domains (`/src/core_ai/`, `/src/blue_swarm/`, `/src/crypto/`, `/src/memory_systems/`, etc.), proving zero `MODULE_NOT_FOUND` exceptions and pure scaling capability.
 
+* **Centralized Prisma Connection Pooling**: Surgically refactored the database architecture by consolidating database client instances under a single centralized client ([prismaClient.js](file:///c:/Users/ahmed/OneDrive/Documents/GitHub/Bayezid-Fighter-SOAR-0.3.0-/Bayezid%20Fighter/src/api/prismaClient.js)). This caps concurrent pools and resolves database connection pool exhaustion/timeout crashes when querying remote database clusters.
+
+* **PowerShell Windows Daemon Spawning & Teardown**: Re-engineered the daemon spawning pipeline ([pythonManager.js](file:///c:/Users/ahmed/OneDrive/Documents/GitHub/Bayezid-Fighter-SOAR-0.3.0-/Bayezid%20Fighter/src/core_ai/pythonManager.js)) to spawn the 4 Python ML services concurrently inside independent, popped-up console windows using PowerShell's `Start-Process -Wait` cmdlet. This solves path-quoting and argument-splitting errors on Windows workspaces containing spaces, prevents rapid crash-restart loops, and hooks into the server's `SIGINT` handler for automated, graceful window cleanup.
+
+* **ChromaDB v2 Migration**: Migrated all vector memory retrieval systems in [chromaService.js](file:///c:/Users/ahmed/OneDrive/Documents/GitHub/Bayezid-Fighter-SOAR-0.3.0-/Bayezid%20Fighter/src/memory_systems/chromaService.js) to consume ChromaDB's v2 REST API path specification, mapping it onto port `8004` to avoid port binding conflicts with the ML Sniper (port `8000`).
+
+* **WebSocket Broadcast Batching**: Upgraded [notificationService.js](file:///c:/Users/ahmed/OneDrive/Documents/GitHub/Bayezid-Fighter-SOAR-0.3.0-/Bayezid%20Fighter/src/api/notificationService.js) to buffer real-time alerts and broadcast them to Socket.IO clients in 1-second batches (`broadcastAlert`/`initWsBatching`), preventing socket flooding on high-velocity telemetry events.
+
+* **Linux Telemetry Streamer**: Added a dedicated telemetry daemon ([linuxTelemetryDaemon.js](file:///c:/Users/ahmed/OneDrive/Documents/GitHub/Bayezid-Fighter-SOAR-0.3.0-/Bayezid%20Fighter/src/intelligence/linuxTelemetryDaemon.js)) that tracks auth and execution logs (`/var/log/auth.log`) to stream SSH/sudo telemetry directly into the central SQLite database.
+
+* **Multi-Tenant Guest Sandbox Personalization**: Built [guestMemoryManager.js](file:///c:/Users/ahmed/OneDrive/Documents/GitHub/Bayezid-Fighter-SOAR-0.3.0-/Bayezid%20Fighter/src/memory_systems/guestMemoryManager.js) to manage isolated, custom conversational contexts, nicknames, and roleplay preferences for non-admin guests talking to the Wingman Telegram gateway.
+
 ---
 
 ## Core Value Propositions (The Intelligence Loop & Enterprise Defense)
@@ -103,6 +115,12 @@ Bayezid is engineered to solve the "Big Three" SOC challenges: Alert Fatigue, Ve
 * **Closed-Loop Auto-Remediation (Red-to-Blue Bridge):** Bridges offensive discovery with defensive mitigation. Upon detecting a vulnerability, the Blue Team autonomously classifies the threat, synthesizes executable mitigation code, applies the patch, and summons the Red Team to mathematically verify the fix.
 
 * **The Overseer Wingman Suite:** A multi-layered autonomous self-correction hivemind. If a Red or Blue agent stalls or encounters repeated failures, the Wingman Overseer diagnoses the failure, injects targeted operational corrections directly into Redis, and seamlessly triggers LoRA micro-training loops for absolute evolutionary persistence.
+
+* **Consolidated Prisma Pool (Zero-Downtime DB Core):** Solves database connection exhaustion and thread starvation over remote Supabase links. Caches active connection pools into a unified, shared client interface, ensuring low-latency query returns under 9 concurrent database connection limits.
+
+* **Isolate & Wait Daemon Engine (Windows Developer Mode):** Integrates stable PowerShell-based child window orchestration. Launches individual python engines into interactive windows that stay open on crash for live debugging, while blocking parent telemetry handles to track daemon health deterministically.
+
+* **WebSocket Broadcast Batching (Telemetry Socket Shield):** Prevents UI freezing and client disconnects under flood conditions. Real-time alerts are buffered and broadcast in 1-second ticks, reducing socket-level overhead and stabilizing Vite dashboard renders.
 
 ---
 
@@ -141,17 +159,24 @@ When toggled to **RED MODE**, Bayezid activates a proactive, fully autonomous of
 | Domain | Service / File | Responsibility | Technology |
 | --- | --- | --- | --- |
 | **`api`** | `server.js` | Central Orchestrator, API Routes, Mode Switcher | Node.js / Express |
+| **`api`** | `prismaClient.js` | Centralized database connection pool manager | Prisma Client / Supabase |
 | **`bayezid-frontend`** | `app/` | Real-time React intelligence dashboard | React / Vite / Tailwind |
 | **`core_ai`** | `bayezidBrain.js` | The LLM Orchestrator & Live LoRA Fine-Tuning | Python / SFTTrainer / LLM |
+| **`core_ai`** | `aiOrchestrator.js` | Orchestrates decision-making logic & causal verification loops | Node.js |
 | **`core_ai`** | `aiService.js` | Multi-Agent Logic, K8s Pod Orchestration (`runWardenSandbox`) | Gemini / Qwen / K8s Client |
+| **`core_ai`** | `pythonManager.js` | Manages Python ML daemons on Windows via PowerShell with lifecycle tracking | Node.js / PowerShell |
 | **`core_ai`** | `wingmanOverseer.js` | Autonomous self-correction, stall detection, and dynamic patching | Node.js / Redis |
 | **`intelligence`** | `telemetryHub.js` | High-velocity SQLite telemetry ingestion | SQLite3 |
 | **`intelligence`** | `intelligenceReports.js` | Multi-dimensional CTI, IR, and Forensics automated Markdown generation | Node.js / YARA |
+| **`intelligence`** | `linuxTelemetryDaemon.js` | Tail-monitors raw Linux log streams (auth.log) for SSH/sudo anomalies | Node.js / FS Stream |
 | **`blue_swarm`** | `kernelStriker.js` | Autonomous L3 IP Blocking and TTL expiration daemon | OS Firewall Commands |
 | **`blue_swarm`** | `oracleGNN.js` | Graph Neural Network for topology & lateral movement prediction | JavaScript / GraphSAGE |
+| **`blue_swarm`** | `dockerOrchestrator.js` | Ephemeral docker-container helper and validation sandbox | Node.js / Docker SDK |
 | **`red_swarm`** | `chimeraEngine.js` | Polymorphic lethality and in-memory execution | JS / LLVM-IR Mutation |
 | **`purple_engine`** | `purpleOrchestrator.js` | The Dungeon Master bridging offensive findings to defensive patches | Node.js / LLM |
 | **`memory_systems`** | `mnemonProbe.js` | Advanced eBPF memory protections (mmap, ptrace) | Node.js / eBPF |
+| **`memory_systems`** | `chromaService.js` | Core vector memory integration (ChromaDB v2 API) | Node.js / ChromaDB |
+| **`memory_systems`** | `guestMemoryManager.js` | Persistent multi-tenant storage for non-admin conversational contexts | Node.js / JSONL |
 | **`network`** | `galileoEngine.js` | Mathematical causal inference forensics (Do-Calculus SCM DAGs) | JavaScript |
 | **`crypto`** | `veritasProof.js` | Cryptographic audit engine (288-byte zk-SNARKs) | Node.js Crypto / Circom |
 | **`crypto`** | `swarmCrypto.js` | RSA-2048 key generation, Payload Signing, and Verification | Node.js Crypto |
@@ -227,8 +252,9 @@ You can test the core AI capabilities via these bridge endpoints using Postman. 
 ```env
 PORT=3000
 
-# Legacy Vector Memory (Optional)
+# Centralized Prisma Databases
 DATABASE_URL="postgresql://<USER>:<PASSWORD>@<HOST>:<PORT>/<DATABASE>"
+DIRECT_URL="postgresql://<USER>:<PASSWORD>@<HOST>:<PORT>/<DATABASE>"
 
 # AI Orchestration Keys
 AI_MODE=CLOUD
@@ -238,21 +264,39 @@ GROQ_API_KEY="gsk_OUR_GROQ_API_KEY_HERE"
 LOCAL_MODEL_NAME="qwen2.5-coder:7b"
 OLLAMA_BASE_URL="http://localhost:11434"
 
-# Alerting
+# Telegram Bot Authorization Gates
 TELEGRAM_BOT_TOKEN="YOUR_TELEGRAM_BOT_TOKEN_HERE"
 TELEGRAM_CHAT_ID="YOUR_TELEGRAM_CHAT_ID_HERE"
+WINGMAN_AUTHORIZED_OPERATORS="1167257139"
+WINGMAN_TELEGRAM_PIN="2420016"
+WINGMAN_TELEGRAM_BOT_TOKEN="YOUR_WINGMAN_BOT_TOKEN_HERE"
+WINGMAN_TELEGRAM_CHAT_ID="YOUR_WINGMAN_CHAT_ID_HERE"
 
-# Cryptography
+# Cryptography & Token Keys
 ENCRYPTION_KEY="your_64_character_hex_string_here"
 ENCRYPTION_IV="your_32_character_hex_string_here"
+JWT_SECRET="b4y3z1d_s0ar_jwt_s3cr3t_k3y_64bytes_hex..."
+MASTER_SCOPE_KEY="b4y3z1d_r0e_sc0pe_m4ster_key..."
+BAYEZID_API_KEY="bzd-secure-7x9-v2"
 
 # Cyber Threat Intelligence APIs
 OTX_API_KEY="your_alienvault_otx_api_key_here"
 OPENCTI_URL="https://your-opencti-instance-url"
 OPENCTI_TOKEN="your_opencti_token_here"
 
+# Vector Memory & Live Bus
+REDIS_URL="redis://127.0.0.1:6379"
+CHROMA_URL="http://localhost:8004"
+
+# SLAs & Swarm Coordination
 SLA_TIMEOUT_MINUTES=5
-SWARM_NODES="http://node2.agency.gov,http://node3.agency.gov"
+SWARM_NODES="http://localhost:3000"
+
+# Operational Mode Settings
+BAYEZID_EXECUTION_MODE=SIMULATED  # SIMULATED = safe synthetic telemetry; LIVE_FIRE = real execution
+BAYEZID_ROE_TOKEN=b4y3z1d_k1n3t1c_0v3rr1d3_99x  # RoE token override for live-fire activation
+BAYEZID_COGNITIVE_MODE=CLOUD_WATERFALL  # CLOUD_WATERFALL = LLM cascade; AUTONOMOUS_NEURAL = Local air-gapped ML
+BAYEZID_EBPF_MODE=monitor  # monitor = XDP_PASS telemetry; enforce = kernel-level drops
 ```
 
 ---
